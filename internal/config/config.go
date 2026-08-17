@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 )
 
 // Config holds everything the MCP server needs to run.
@@ -19,6 +20,9 @@ type Config struct {
 
 	// Directory where save_attachment writes files.
 	AttachmentsDir string
+
+	// Maximum attachment size read_attachment returns inline, in bytes.
+	MaxInlineAttachment int64
 }
 
 // Load reads configuration from the environment.
@@ -27,6 +31,7 @@ type Config struct {
 //	                         (imap:// connects to port 143 and upgrades via STARTTLS;
 //	                         URL-escape special characters in the password)
 //	POSTFACH_ATTACHMENTS_DIR optional, default ./attachments
+//	POSTFACH_MAX_INLINE_MB   optional, default 5: size cap for read_attachment
 func Load() (*Config, error) {
 	raw := os.Getenv("POSTFACH_IMAP_URL")
 	if raw == "" {
@@ -74,6 +79,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("resolve attachments dir: %w", err)
 	}
 	cfg.AttachmentsDir = abs
+
+	cfg.MaxInlineAttachment = 5 << 20
+	if s := os.Getenv("POSTFACH_MAX_INLINE_MB"); s != "" {
+		mb, err := strconv.ParseInt(s, 10, 64)
+		if err != nil || mb <= 0 {
+			return nil, fmt.Errorf("POSTFACH_MAX_INLINE_MB: invalid value %q", s)
+		}
+		cfg.MaxInlineAttachment = mb << 20
+	}
 	return cfg, nil
 }
 
