@@ -27,9 +27,19 @@ func main() {
 	}
 	log.Printf("imap %s as %s, attachments dir %s", cfg.Addr(), cfg.Username, cfg.AttachmentsDir)
 
-	// Screening chain: heuristics now; the Prompt Guard 2 (ONNX/CoreML)
-	// screener will be appended here once wired up.
+	// Screening chain: heuristics first, then the Prompt Guard 2 classifier
+	// when configured (POSTFACH_PG2_MODEL + build tag promptguard).
 	screener := screen.Chain{screen.NewHeuristic()}
+	pg, err := screen.NewPromptGuardFromEnv()
+	if err != nil {
+		log.Fatalf("promptguard: %v", err)
+	}
+	if pg != nil {
+		screener = append(screener, pg)
+		log.Printf("prompt guard 2 classifier enabled")
+	} else {
+		log.Printf("prompt guard 2 classifier disabled (POSTFACH_PG2_MODEL not set); heuristics only")
+	}
 
 	s := server.NewMCPServer("postfach", version,
 		server.WithToolCapabilities(true),

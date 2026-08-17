@@ -10,20 +10,21 @@ Postfach is an MCP (Model Context Protocol) server that exposes tools for workin
 - provides tools for reading email and saving attachments,
 - screens all email-derived content for prompt injection before returning it to the client.
 
-The repository currently has no code — this file records the decided stack, intended design, and org conventions.
+## Stack
 
-## Stack (decided)
+- **Go** (parent `../go.work` pins `go 1.26.1`; this module is listed in it), single binary, no sidecars.
+- **MCP:** `github.com/mark3labs/mcp-go` — same library and pattern as sibling `hub`: `server.NewMCPServer` + `server.ServeStdio`, entrypoint `cmd/postfach-mcp`.
+- **Mail:** `github.com/emersion/go-imap/v2` (IMAP) + `github.com/emersion/go-message` (MIME/attachments) in `internal/mail`.
+- **Screening** (`internal/screen`): `Screener` interface, chain of two layers — regex heuristics (EN/RU/DE, always on) and **Llama Prompt Guard 2 86M** int8 ONNX via `github.com/yalue/onnxruntime_go` + `github.com/daulet/tokenizers`, compiled only with **build tag `promptguard`** (the default build has a stub and needs no native deps).
+- Model and native libs are **not committed**: `make fetch-model` / `make deps-guard` download them into `models/` and `third_party/` (gitignored).
 
-- **Go** (parent `../go.work` pins `go 1.26.1`), single binary, no sidecars.
-- **MCP:** `github.com/mark3labs/mcp-go` — same library and pattern as sibling `hub` (`../hub/cmd/*-mcp/main.go`): `server.NewMCPServer(name, version, ...)` + `server.ServeStdio(s)`, one binary per MCP server under `cmd/`.
-- **Mail:** `github.com/emersion/go-imap/v2` for IMAP, `github.com/emersion/go-message` for MIME parsing and attachment extraction.
-- **Prompt-injection screening: in-process ONNX Runtime** (e.g. `github.com/yalue/onnxruntime_go`, cgo) with the **CoreML execution provider** on macOS for Apple GPU/ANE, running **Llama Prompt Guard 2 86M** (ONNX export exists on Hugging Face, e.g. `gravitee-io/Llama-Prompt-Guard-2-86M-onnx`; tokenizer.json ships with it — use HF-tokenizers Go bindings such as `github.com/daulet/tokenizers`).
-- Model files are **not committed**; they are downloaded to a local cache dir whose path comes from an env var.
+### Prompt Guard 2 facts (measured, design around them)
 
-### Known limits of Prompt Guard 2 86M (design around them)
-
-- **512-token inspection window** — long email bodies must be scanned in overlapping chunks; the message is flagged if *any* chunk classifies as injection/jailbreak.
-- **8 languages, no Russian** — keep the screener behind a `Screener` interface so the model/runtime can be swapped (e.g. Ollama + Qwen3Guard-Gen 0.6B for multilingual) without touching tool code.
+- **Score dilution:** the classifier scores a whole window, so a 16-token injection scores 0.99 alone but 0.04 inside ~100 benign tokens. Hence two-scale scanning in `promptguard.go`: coarse 510-token windows + fine 64-token windows (stride 32), max score wins. Don't "optimize" the fine scan away.
+- **CoreML EP is opt-in** (`POSTFACH_PG2_COREML=1`) and currently slower than CPU: the export has unbounded dims, CoreML rejects nodes and recompiles per shape. Fixed-shape re-export is the path to GPU/ANE.
+- **ORT version coupling:** the `onnxruntime` release downloaded by the Makefile must match the ORT API version `yalue/onnxruntime_go` expects (v1.33 → ORT 1.29). A mismatch fails at init with "requested API version".
+- **8 languages, no Russian** in PG2 — the heuristics carry RU; the `Screener` interface allows swapping in a multilingual model (e.g. Qwen3Guard) later.
+- Tokenizer is loaded with truncation/padding stripped from `tokenizer.json` (`loadTokenizerNoTruncation`) so long texts tokenize fully — keep it that way, silent truncation defeats chunking.
 
 ### go.work gotcha (important)
 
@@ -34,13 +35,13 @@ This repo sits inside `~/projects/hugr-lab/`, which has a `go.work` that does **
 
 ## Commands
 
-Standard Go workflow (after the module is created):
-
 ```sh
-go build ./...
-go vet ./...
-go test ./...
-go test -run TestName ./path/to/pkg/   # single test
+go build ./... && go vet ./... && go test ./...   # default build, no native deps
+go test -run TestName ./internal/screen/          # single test
+
+make deps-guard fetch-model   # one-time: native libs + model (~280 MB)
+make build-guard              # binary with -tags promptguard (needs CGO_LDFLAGS, see Makefile)
+make test-guard               # integration tests against the real model
 ```
 
 ## Architecture Constraints
@@ -50,3 +51,8 @@ go test -run TestName ./path/to/pkg/   # single test
 - **Email content is untrusted input.** Every string originating from a mailbox (subjects, bodies, sender names, attachment filenames) passes through the screening layer before it is placed in a tool result. Screening is layered: cheap heuristics in Go first, then the Prompt Guard 2 classifier. This layer sits between the mail client and the tool response and is not optional per-tool.
 - **Attachment safety.** Attachments are written only under a configured output directory; sanitize filenames against path traversal.
 - **Configuration via env only.** Mailbox credentials/connection strings come from environment variables; never log them or echo them back through tool results.
+
+## Roadmap notes
+
+- First real deployment: an invoice mailbox (PDF + e-Rechnung XML). Planned tool `get_attached_erechnung`: parse XRechnung (UBL/CII) and ZUGFeRD/Factur-X (XML embedded in PDF/A-3) on the Go side into structured JSON instead of dumping raw XML into context.
+- `read_attachment` returns content inline (screened text / image / base64 blob) capped by `POSTFACH_MAX_INLINE_MB`; larger files go through `save_attachment`.
