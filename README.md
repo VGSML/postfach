@@ -16,11 +16,55 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_GUARD_LLM_MODEL` | no | Model id of a guard LLM served over an OpenAI-compatible API (enables the multilingual screener), e.g. `qwen3guard-gen-0.6b`. |
 | `POSTFACH_GUARD_LLM_URL` | no | Base URL of that API. Default `http://localhost:1234/v1` (LM Studio); Ollama is `http://localhost:11434/v1`. |
 | `POSTFACH_DOC_LINK_TEMPLATE` | no | URL template for opening saved documents from the spreadsheet; `{filename}` is replaced (URL-escaped). Default: Google Drive exact-name search. |
+| `POSTFACH_HTTP_ADDR` | no | Serve streamable HTTP MCP on this address (endpoint `/mcp`) instead of stdio — for remote connectors (ChatGPT developer mode). |
+| `POSTFACH_HTTP_TOKEN` | with HTTP | Mandatory bearer token (min 16 chars) for HTTP mode; the server refuses to start without it. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
 | `POSTFACH_PG2_COREML` | no | `1` to try the CoreML execution provider (default CPU; see below). |
 | `POSTFACH_ORT_LIB` | no | Path to `libonnxruntime.dylib`, default: `third_party/`, then Homebrew paths. |
+
+## Installation
+
+macOS on Apple Silicon only (for now).
+
+**From a GitHub release** (prebuilt binary, no Go needed):
+
+```sh
+curl -fsSL https://github.com/hugr-lab/postfach/releases/latest/download/postfach-latest-darwin-arm64.tar.gz | tar -xz
+cd postfach && ./install.sh
+```
+
+**From source**: clone the repo and run `./install.sh`. Either way the
+installer asks for the mailbox, folders, screening models (Prompt Guard 2
+variant, guard LLM auto-detected from LM Studio/Ollama) and the language
+allowlist, downloads what is missing, smoke-tests the server and offers to
+register it with Claude Code. Non-interactive: `./install.sh --yes` with
+config in env.
+
+**As a Claude Code plugin** (adds the `postfach-mail` skill that teaches
+the model the processing workflow, and `/postfach:setup`):
+
+```
+/plugin marketplace add hugr-lab/postfach
+/plugin install postfach@hugr-lab
+/postfach:setup
+```
+
+**ChatGPT Work (developer mode)** uses remote MCP connectors, which call
+the server from OpenAI's side — stdio is not enough. Run postfach in HTTP
+mode and expose it through a tunnel:
+
+```sh
+POSTFACH_HTTP_ADDR=127.0.0.1:8787 POSTFACH_HTTP_TOKEN="$(openssl rand -hex 24)" \
+  sh -c 'set -a; source .env; ./postfach-mcp' &
+cloudflared tunnel --url http://127.0.0.1:8787   # or any tunnel/reverse proxy
+```
+
+then add a connector in ChatGPT developer mode with URL
+`https://<tunnel-host>/mcp` and the bearer token. The full screening chain
+applies regardless of transport. Releases are cut by tagging `v*` (see
+`.github/workflows/release.yml`).
 
 ## Build & run
 

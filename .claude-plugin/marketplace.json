@@ -1,0 +1,13 @@
+{
+  "name": "hugr-lab",
+  "owner": {
+    "name": "hugr-lab"
+  },
+  "plugins": [
+    {
+      "name": "postfach",
+      "source": "./",
+      "description": "Email mailbox tools with prompt-injection screening, e-invoice parsing and registries in Google Sheets."
+    }
+  ]
+}
