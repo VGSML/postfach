@@ -76,6 +76,7 @@ between "compiles" and "works against a real mailbox". The
 
 ## Distribution
 
+- **Update path**: re-running `install.sh` with an existing `.env` reuses all settings (sourced as defaults), rebuilds and re-registers — there is no separate updater. Keep it that way.
 - **Installer** `install.sh`: config prompts (mailbox, folders, PG2 variant, guard LLM auto-detect, languages) → build or prebuilt → model download → smoke test → `claude mcp add`. Works from a repo checkout (builds) and from a release tarball (prebuilt binary; no Go). macOS arm64 only.
 - **Claude Code plugin**: `.claude-plugin/plugin.json` (embedded MCP server config with env passthrough), `skills/postfach-mail/SKILL.md` (the playbook as a skill), `commands/setup.md` (`/postfach:setup`). Marketplace manifest points at the repo itself.
 - **Releases**: tag `v*` → `.github/workflows/release.yml` builds the guard binary on a macOS arm64 runner and attaches `postfach-<tag>-darwin-arm64.tar.gz` (binary + ORT dylib + installer + plugin files; the model is downloaded by the installer).

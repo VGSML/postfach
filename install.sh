@@ -87,6 +87,17 @@ fetch_ort() {
 }
 
 # --- configuration -----------------------------------------------------------
+# A previous run's .env provides the defaults, so re-running the installer
+# (after git pull or unpacking a new release over this directory) updates
+# the binary while keeping every setting: that IS the update path.
+if [ -f .env ]; then
+  say "found .env from a previous install — reusing its settings (updating)"
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+fi
+
 say "mailbox"
 ask POSTFACH_IMAP_URL "IMAP URL (imaps://user%40domain:password@imap.example.com:993)"
 case "$POSTFACH_IMAP_URL" in
@@ -226,8 +237,8 @@ if [ "$REGISTER" = 1 ] && command -v claude >/dev/null; then
     claude mcp add --scope user postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
     say "registered with Claude Code (user scope)"
     if claude plugin marketplace add "$ROOT" >/dev/null 2>&1 || claude plugin marketplace update hugr-lab >/dev/null 2>&1; then
-      if claude plugin install postfach@hugr-lab >/dev/null 2>&1; then
-        say "installed the postfach plugin (postfach-mail skill, /postfach:setup, /postfach:remove)"
+      if claude plugin install postfach@hugr-lab >/dev/null 2>&1 || claude plugin update postfach@hugr-lab >/dev/null 2>&1; then
+        say "installed/updated the postfach plugin (postfach-mail skill, /postfach:setup, /postfach:remove)"
       else
         warn "plugin install failed; skill unavailable (try /plugin install postfach@hugr-lab in a session)"
       fi

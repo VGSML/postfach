@@ -72,6 +72,27 @@ directly. Two ways in:
   (gitignored). Add this directory as a local marketplace in developer
   mode and install the `postfach` plugin.
 
+## Update
+
+Re-running the installer IS the update: it reuses the settings saved in
+`.env`, rebuilds/replaces the binary, and refreshes every registration
+(including the plugin).
+
+```sh
+# from source
+cd postfach && git pull && ./install.sh --yes
+
+# from a release package: unpack the new tarball over the old directory
+curl -fsSL https://github.com/VGSML/postfach/releases/latest/download/postfach-darwin-arm64.tar.gz | tar -xz
+cd postfach && ./install.sh --yes
+```
+
+Models, native libs, documents and registries are kept (downloads are
+skipped when the files already exist). Afterwards: restart Claude
+Desktop / ChatGPT, or `/mcp` → Reconnect in a running Claude Code
+session. To change settings during an update, run without `--yes` (saved
+values are offered as defaults) or export the variable before running.
+
 ## Uninstall
 
 ```sh
