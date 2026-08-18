@@ -15,6 +15,7 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_ALLOWED_LANGS` | no | Language allowlist for the screening gate, default `en,de,fr,it,es,ru`. Comma-separated ISO codes; `any` disables the gate. |
 | `POSTFACH_GUARD_LLM_MODEL` | no | Model id of a guard LLM served over an OpenAI-compatible API (enables the multilingual screener), e.g. `qwen3guard-gen-0.6b`. |
 | `POSTFACH_GUARD_LLM_URL` | no | Base URL of that API. Default `http://localhost:1234/v1` (LM Studio); Ollama is `http://localhost:11434/v1`. |
+| `POSTFACH_DOC_LINK_TEMPLATE` | no | URL template for opening saved documents from the spreadsheet; `{filename}` is replaced (URL-escaped). Default: Google Drive exact-name search. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
@@ -77,7 +78,8 @@ messages are never marked as seen.
 - `read_message(uid, mailbox="INBOX", body_offset=0, body_limit=4000)` — headers, one page of the text body (character-based pagination with `body_total_chars` / `body_next_offset`), and the attachment list with per-attachment `sha256`. The full body is always screened regardless of the requested page.
 - `read_attachment(uid, attachment_index, mailbox="INBOX", offset=0, limit=4000)` — returns the attachment inline with its MIME type and `sha256`: text/XML (incl. e-invoice XML) as screened, paginated text; images as image content; PDFs and other binaries as base64 blobs; embedded emails (`message/rfc822`, `.eml`) unwrapped into a structured view. Capped by `POSTFACH_MAX_INLINE_MB`.
 - `read_quarantined(uid, attachment_index=-1, mailbox="INBOX", offset=0, limit=4000)` — the escape hatch for blocked content (e.g. language outside the allowlist): returns the body or a text attachment in **defused** form — whitespace replaced with `ˆ` markers, long unbroken runs (CJK) split, every line prefixed with `❯` (spotlighting/datamarking), so embedded instructions read as data. The screening verdict is always attached.
-- `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR`, appends a record (uid, filename, path, `sha256`, sender, screening verdict) to `registry.jsonl` there, and deduplicates by hash: identical content is not written twice.
+- `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR`, appends a record (uid, filename, path, `sha256`, sender, screening verdict) to `registry.jsonl` there, and deduplicates by hash: identical content is not written twice. Saved names carry a short content-hash suffix (`Mahnung_10651-83afa79c.pdf`), so a by-name lookup is unambiguous even when senders reuse names; the result includes `doc_link` (see `POSTFACH_DOC_LINK_TEMPLATE`).
+- `get_cursor(mailbox)` / `set_cursor(mailbox, last_uid, uid_validity)` — the persisted incremental-sync cursor. The model commits the cursor only after a batch is fully processed; the server never advances it by itself and refuses to move it backwards within one `uid_validity`. If `list_messages` reports a different `uid_validity`, the UID space was reset — full rescan.
 - `get_attached_erechnung(uid, attachment_index?, mailbox="INBOX")` — parses e-invoice attachments on the Go side into structured JSON: XRechnung XML (UBL and CII syntax) and ZUGFeRD/Factur-X (XML embedded in PDF/A-3, extracted with pdfcpu). Plain PDFs without embedded XML are reported as such — read them with `read_attachment` and extract fields yourself.
 
 Nested `.eml` attachments are flattened into the parent message's
@@ -98,8 +100,17 @@ registry of invoices and one of Mahnungen ..."):
 Storage: `registry-<name>.jsonl` (append-only journal, tombstoned deletes) +
 `registry-<name>.meta.json` (description, field docs, column order) in the
 attachments directory, and one workbook `Register.xlsx` with a sheet per
-registry, regenerated on every change — sync the folder with Google Drive
-and the registries are readable in Google Sheets.
+registry — sync the folder with Google Drive and the registries are
+readable in Google Sheets. The workbook is a *projection*: it is
+regenerated from the journals on every change and always contains ALL live
+entries of all registries, not just the latest batch.
+
+Document links in the sheet: the source-file cell links via
+`POSTFACH_DOC_LINK_TEMPLATE` (default: Drive by-name search — unambiguous
+thanks to the hash-suffixed filenames), and any field whose value is an
+http(s) URL is rendered clickable. For direct links, let the model fetch
+the real Drive file URL through a Drive connector after sync and update
+the entry (`record_entry` with a `link` field merges by key).
 
 ## Security model
 

@@ -460,14 +460,39 @@ func TestE2E(t *testing.T) {
 		}
 	})
 
+	t.Run("cursor_roundtrip", func(t *testing.T) {
+		m, _ := call(t, tl.handleGetCursor, map[string]any{})
+		if m["exists"] != false {
+			t.Fatalf("fresh cursor: %v", m)
+		}
+		m, _ = call(t, tl.handleSetCursor, map[string]any{
+			"last_uid": float64(4), "uid_validity": float64(12345),
+		})
+		if m["saved"] != true {
+			t.Fatalf("set: %v", m)
+		}
+		m, _ = call(t, tl.handleGetCursor, map[string]any{})
+		if m["exists"] != true || m["last_uid"].(float64) != 4 || m["uid_validity"].(float64) != 12345 {
+			t.Errorf("get after set: %v", m)
+		}
+		// Moving backwards within the same uid_validity is refused.
+		req := mcp.CallToolRequest{}
+		req.Params.Arguments = map[string]any{"last_uid": float64(2), "uid_validity": float64(12345)}
+		res, err := tl.handleSetCursor(context.Background(), req)
+		if err != nil || !res.IsError {
+			t.Errorf("backwards cursor accepted: %+v", res)
+		}
+	})
+
 	t.Run("save_attachment_and_dedup", func(t *testing.T) {
 		m, _ := call(t, tl.handleSaveAttachment, map[string]any{"uid": float64(1), "attachment_index": float64(0)})
 		path := m["saved_path"].(string)
 		if data, err := os.ReadFile(path); err != nil || !bytes.Equal(data, pdfData) {
 			t.Fatalf("saved file mismatch (err=%v)", err)
 		}
-		if !strings.HasSuffix(path, "rechnung.pdf") {
-			t.Errorf("saved name: %q", path)
+		wantName := fmt.Sprintf("rechnung-%s.pdf", m["sha256"].(string)[:8])
+		if !strings.HasSuffix(path, wantName) {
+			t.Errorf("saved name: %q, want suffix %q", path, wantName)
 		}
 		reg, err := os.ReadFile(filepath.Join(filepath.Dir(path), "registry.jsonl"))
 		if err != nil || !strings.Contains(string(reg), `"uid":1`) {

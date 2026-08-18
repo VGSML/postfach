@@ -34,7 +34,7 @@ type Tools struct {
 }
 
 func New(cfg *config.Config, s screen.Screener) *Tools {
-	return &Tools{cfg: cfg, screener: s, ledger: ledger.New(cfg.AttachmentsDir)}
+	return &Tools{cfg: cfg, screener: s, ledger: ledger.New(cfg.AttachmentsDir, cfg.DocLink)}
 }
 
 // Register adds all postfach tools to the MCP server.
@@ -100,6 +100,7 @@ func (t *Tools) Register(s *server.MCPServer) {
 	), t.handleSaveAttachment)
 
 	t.registerInvoiceTools(s)
+	t.registerCursorTools(s)
 }
 
 // guard screens one untrusted string and applies the redaction policy.
@@ -615,6 +616,10 @@ func (t *Tools) handleSaveAttachment(ctx context.Context, req mcp.CallToolReques
 	if verdict.Flagged {
 		name = fallback
 	}
+	// A short content-hash suffix makes the name globally unique, so a
+	// by-name search (the doc_link) resolves to exactly one file even when
+	// senders reuse names like Rechnung.pdf.
+	name = withHashSuffix(name, att.SHA256)
 
 	if err := os.MkdirAll(t.cfg.AttachmentsDir, 0o755); err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("create attachments dir: %v", err)), nil
@@ -657,6 +662,9 @@ func (t *Tools) handleSaveAttachment(ctx context.Context, req mcp.CallToolReques
 		"content_type":      att.ContentType,
 		"original_filename": screen.StripInvisible(att.Filename),
 		"registry":          filepath.Join(t.cfg.AttachmentsDir, registryFile),
+	}
+	if link := t.cfg.DocLink(name); link != "" {
+		result["doc_link"] = link
 	}
 	if verdict.Flagged {
 		result["screening"] = verdict

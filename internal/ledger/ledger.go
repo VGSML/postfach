@@ -69,12 +69,17 @@ type registryMeta struct {
 	FieldDocs   map[string]string `json:"field_docs,omitempty"`
 }
 
-// Ledger is bound to one directory.
+// Ledger is bound to one directory. docLink (optional) renders a web URL
+// for a saved document's file name; it becomes a hyperlink in the
+// workbook so registry rows can open their document from any machine.
 type Ledger struct {
-	dir string
+	dir     string
+	docLink func(filename string) string
 }
 
-func New(dir string) *Ledger { return &Ledger{dir: dir} }
+func New(dir string, docLink func(string) string) *Ledger {
+	return &Ledger{dir: dir, docLink: docLink}
+}
 
 // XLSXPath is where the workbook is written.
 func (l *Ledger) XLSXPath() string { return filepath.Join(l.dir, XLSXName) }
@@ -484,6 +489,25 @@ func (l *Ledger) WriteXLSX() error {
 				cell, _ := excelize.CoordinatesToCellName(col+1, row+2)
 				if err := f.SetCellValue(sheet, cell, v); err != nil {
 					return err
+				}
+				// Any URL-valued field becomes clickable — this is how a
+				// direct document link (e.g. the real Drive file URL the
+				// model fetched after sync) lands in the sheet.
+				if s, ok := v.(string); ok && (strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "http://")) {
+					if err := f.SetCellHyperLink(sheet, cell, s, "External"); err != nil {
+						return err
+					}
+				}
+			}
+			// Fallback link on the source-file cell (e.g. a Drive by-name
+			// search) so the document opens from any machine even before a
+			// direct link was recorded.
+			if file != "" && l.docLink != nil {
+				if link := l.docLink(file); link != "" {
+					cell, _ := excelize.CoordinatesToCellName(len(header)-3, row+2)
+					if err := f.SetCellHyperLink(sheet, cell, link, "External"); err != nil {
+						return err
+					}
 				}
 			}
 		}

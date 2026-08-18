@@ -47,6 +47,19 @@ func SanitizeFilename(name, fallback string) string {
 	return name
 }
 
+// withHashSuffix inserts a short content-hash before the extension:
+// "Rechnung.pdf" + sha → "Rechnung-83afa79c.pdf".
+func withHashSuffix(name, sha256hex string) string {
+	if len(sha256hex) < 8 {
+		return name
+	}
+	suffix := "-" + sha256hex[:8]
+	if i := strings.LastIndexByte(name, '.'); i > 0 {
+		return name[:i] + suffix + name[i:]
+	}
+	return name + suffix
+}
+
 // uniqueName appends -1, -2, ... before the extension until exists(name)
 // reports false.
 func uniqueName(name string, exists func(string) bool) string {

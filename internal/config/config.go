@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 // Config holds everything the MCP server needs to run.
@@ -24,6 +25,12 @@ type Config struct {
 
 	// Maximum attachment size read_attachment returns inline, in bytes.
 	MaxInlineAttachment int64
+
+	// URL template for opening a saved document from the registry
+	// spreadsheet on another machine; {filename} is replaced with the
+	// URL-escaped file name. Default: Google Drive exact-name search,
+	// which works in the web UI once the attachments folder is synced.
+	DocLinkTemplate string
 }
 
 // Load reads configuration from the environment.
@@ -92,7 +99,20 @@ func Load() (*Config, error) {
 		}
 		cfg.MaxInlineAttachment = mb << 20
 	}
+
+	cfg.DocLinkTemplate = os.Getenv("POSTFACH_DOC_LINK_TEMPLATE")
+	if cfg.DocLinkTemplate == "" {
+		cfg.DocLinkTemplate = `https://drive.google.com/drive/search?q=%22{filename}%22`
+	}
 	return cfg, nil
+}
+
+// DocLink renders the document link for a saved file name.
+func (c *Config) DocLink(filename string) string {
+	if filename == "" || c.DocLinkTemplate == "" {
+		return ""
+	}
+	return strings.ReplaceAll(c.DocLinkTemplate, "{filename}", url.QueryEscape(filename))
 }
 
 // Addr returns the host:port dial address.

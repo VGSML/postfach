@@ -15,7 +15,7 @@ func mustCreate(t *testing.T, l *Ledger, name, desc string, fields ...FieldDef) 
 }
 
 func TestLifecycle(t *testing.T) {
-	l := New(t.TempDir())
+	l := New(t.TempDir(), nil)
 	mustCreate(t, l, "rechnungen", "Eingehende Rechnungen",
 		FieldDef{Name: "betrag", Description: "Bruttobetrag"},
 		FieldDef{Name: "status", Description: "new/geprüft/bezahlt"})
@@ -82,7 +82,7 @@ func TestLifecycle(t *testing.T) {
 }
 
 func TestUpsertValidation(t *testing.T) {
-	l := New(t.TempDir())
+	l := New(t.TempDir(), nil)
 	if _, _, _, err := l.Upsert("nope", Entry{Key: "k", Fields: map[string]any{"a": 1}}); err == nil {
 		t.Error("upsert into nonexistent registry accepted")
 	}
@@ -99,7 +99,7 @@ func TestUpsertValidation(t *testing.T) {
 }
 
 func TestXLSXWorkbook(t *testing.T) {
-	l := New(t.TempDir())
+	l := New(t.TempDir(), nil)
 	mustCreate(t, l, "rechnungen", "", FieldDef{Name: "verkaeufer"}, FieldDef{Name: "brutto"})
 	mustCreate(t, l, "anfragen", "", FieldDef{Name: "thema"})
 	if _, _, _, err := l.Upsert("rechnungen", Entry{
@@ -137,5 +137,44 @@ func TestXLSXWorkbook(t *testing.T) {
 	}
 	if _, err := os.Stat(l.XLSXPath()); err != nil {
 		t.Error("workbook not regenerated")
+	}
+}
+
+func TestXLSXDocumentHyperlink(t *testing.T) {
+	l := New(t.TempDir(), func(name string) string {
+		return "https://drive.example/search?q=" + name
+	})
+	mustCreate(t, l, "rechnungen", "", FieldDef{Name: "brutto"}, FieldDef{Name: "link"})
+	if _, _, _, err := l.Upsert("rechnungen", Entry{
+		Key: "RE-9",
+		Fields: map[string]any{
+			"brutto": "10.00",
+			"link":   "https://drive.google.com/file/d/FILE123/view",
+		},
+		Source: Source{SavedPath: "/x/re9.pdf"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := excelize.OpenFile(l.XLSXPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	// Header: Key, brutto, link, Quelle, Mail-UID, Erfasst, Aktualisiert → Quelle = D2.
+	ok, link, err := f.GetCellHyperLink("rechnungen", "D2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || link != "https://drive.example/search?q=re9.pdf" {
+		t.Errorf("fallback hyperlink: ok=%v link=%q", ok, link)
+	}
+	// URL-valued field cell (column C = link) is clickable too.
+	ok, link, err = f.GetCellHyperLink("rechnungen", "C2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || link != "https://drive.google.com/file/d/FILE123/view" {
+		t.Errorf("direct hyperlink: ok=%v link=%q", ok, link)
 	}
 }
