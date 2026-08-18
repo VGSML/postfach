@@ -181,6 +181,20 @@ fi
 for kv in "${ENV_KV[@]}"; do printf "%s='%s'\n" "${kv%%=*}" "${kv#*=}" >> .env; done
 say "wrote .env (gitignored) for manual runs: set -a; source .env; ./postfach-mcp"
 
+# ChatGPT/Codex plugin: generate the local stdio MCP config the manifest
+# (.codex-plugin/plugin.json) points at — absolute paths, full env.
+if command -v python3 >/dev/null; then
+  printf '%s\0' "${ENV_KV[@]}" | python3 -c '
+import json, sys
+pairs = [s for s in sys.stdin.buffer.read().decode().split("\0") if s]
+env = dict(s.split("=", 1) for s in pairs)
+print(json.dumps({"postfach": {"command": sys.argv[1], "env": env}}, indent=2))
+' "$ROOT/postfach-mcp" > .codex-plugin/mcp.json
+  say "wrote .codex-plugin/mcp.json (gitignored) — add this directory as a local marketplace in ChatGPT/Codex developer mode"
+else
+  warn "python3 not found; skipped .codex-plugin/mcp.json (see .codex-plugin/mcp.json.example)"
+fi
+
 # --- smoke test ----------------------------------------------------------
 say "smoke test: starting the server and listing tools"
 SMOKE=$(printf '%s\n%s\n%s\n' \

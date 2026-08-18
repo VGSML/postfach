@@ -1,0 +1,14 @@
+{
+  "postfach": {
+    "command": "/absolute/path/to/postfach/postfach-mcp",
+    "env": {
+      "POSTFACH_IMAP_URL": "imaps://user%40domain:password@imap.example.com:993",
+      "POSTFACH_ATTACHMENTS_DIR": "/Users/you/Downloads/postfach",
+      "POSTFACH_ALLOWED_LANGS": "en,de,fr,it,es,ru",
+      "POSTFACH_PG2_MODEL": "/absolute/path/to/postfach/models/pg2-86m/model.quant.onnx",
+      "POSTFACH_ORT_LIB": "/absolute/path/to/postfach/third_party/onnxruntime/lib/libonnxruntime.dylib",
+      "POSTFACH_GUARD_LLM_MODEL": "qwen3guard-gen-0.6b",
+      "POSTFACH_GUARD_LLM_URL": "http://localhost:1234/v1"
+    }
+  }
+}

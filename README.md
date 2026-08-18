@@ -51,19 +51,24 @@ the model the processing workflow, and `/postfach:setup`):
 /postfach:setup
 ```
 
-**ChatGPT Work (developer mode)** uses remote MCP connectors, which call
-the server from OpenAI's side — stdio is not enough. Run postfach in HTTP
-mode and expose it through a tunnel:
+**ChatGPT Work / Codex (developer mode)**: the package doubles as a Codex
+plugin (`.codex-plugin/plugin.json`) with the same skill and a **local
+stdio MCP server**. `./install.sh` generates `.codex-plugin/mcp.json`
+(absolute paths + your config; gitignored). Then, in developer mode, add
+this directory as a **local marketplace** and install the `postfach`
+plugin — same flow as the hugr plugin.
+
+For genuinely remote setups (server on another machine) there is also a
+streamable HTTP mode:
 
 ```sh
 POSTFACH_HTTP_ADDR=127.0.0.1:8787 POSTFACH_HTTP_TOKEN="$(openssl rand -hex 24)" \
-  sh -c 'set -a; source .env; ./postfach-mcp' &
-cloudflared tunnel --url http://127.0.0.1:8787   # or any tunnel/reverse proxy
+  sh -c 'set -a; source .env; ./postfach-mcp'
 ```
 
-then add a connector in ChatGPT developer mode with URL
-`https://<tunnel-host>/mcp` and the bearer token. The full screening chain
-applies regardless of transport. Releases are cut by tagging `v*` (see
+serving MCP at `/mcp` behind a mandatory bearer token (put a tunnel or
+reverse proxy in front). The full screening chain applies regardless of
+transport. Releases are cut by tagging `v*` (see
 `.github/workflows/release.yml`).
 
 ## Build & run

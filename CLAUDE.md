@@ -79,7 +79,8 @@ between "compiles" and "works against a real mailbox". The
 - **Installer** `install.sh`: config prompts (mailbox, folders, PG2 variant, guard LLM auto-detect, languages) → build or prebuilt → model download → smoke test → `claude mcp add`. Works from a repo checkout (builds) and from a release tarball (prebuilt binary; no Go). macOS arm64 only.
 - **Claude Code plugin**: `.claude-plugin/plugin.json` (embedded MCP server config with env passthrough), `skills/postfach-mail/SKILL.md` (the playbook as a skill), `commands/setup.md` (`/postfach:setup`). Marketplace manifest points at the repo itself.
 - **Releases**: tag `v*` → `.github/workflows/release.yml` builds the guard binary on a macOS arm64 runner and attaches `postfach-<tag>-darwin-arm64.tar.gz` (binary + ORT dylib + installer + plugin files; the model is downloaded by the installer).
-- **HTTP transport** (`POSTFACH_HTTP_ADDR` + mandatory `POSTFACH_HTTP_TOKEN`): streamable HTTP at `/mcp` for remote connectors (ChatGPT developer mode via tunnel). Same tool layer; keep it transport-agnostic.
+- **ChatGPT/Codex plugin**: `.codex-plugin/plugin.json` (same `skills/` dir; `mcpServers` points at gitignored `.codex-plugin/mcp.json` that `install.sh` generates with absolute paths + env). Installed in developer mode via a local marketplace — ChatGPT runs local stdio MCP servers directly; see `~/projects/hugr-lab/skills/hugr-plugin` for the working reference.
+- **HTTP transport** (`POSTFACH_HTTP_ADDR` + mandatory `POSTFACH_HTTP_TOKEN`): streamable HTTP at `/mcp` for genuinely remote setups. Same tool layer; keep it transport-agnostic.
 
 ## Mailbox processing playbook
 
