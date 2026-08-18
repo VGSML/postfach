@@ -4,10 +4,8 @@
 package main
 
 import (
-	"crypto/subtle"
 	"fmt"
 	"log"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -95,40 +93,8 @@ func main() {
 	)
 	tools.New(cfg, cached).Register(s)
 
-	// Transport: stdio by default. POSTFACH_HTTP_ADDR switches to
-	// streamable HTTP — the remote-MCP mode used by ChatGPT developer-mode
-	// connectors and remote Claude setups. Serving a mailbox over HTTP
-	// without auth is not allowed: a bearer token is mandatory.
-	if addr := os.Getenv("POSTFACH_HTTP_ADDR"); addr != "" {
-		token := os.Getenv("POSTFACH_HTTP_TOKEN")
-		if len(token) < 16 {
-			log.Fatalf("POSTFACH_HTTP_ADDR is set, but POSTFACH_HTTP_TOKEN is missing or shorter than 16 characters — refusing to serve the mailbox unauthenticated")
-		}
-		httpSrv := server.NewStreamableHTTPServer(s)
-		mux := http.NewServeMux()
-		mux.Handle("/mcp", requireBearer(token, httpSrv))
-		log.Printf("serving streamable HTTP MCP on %s (endpoint /mcp)", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			log.Fatalf("http: %v", err)
-		}
-		return
-	}
-
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "postfach-mcp error: %v\n", err)
 		os.Exit(1)
 	}
-}
-
-// requireBearer enforces `Authorization: Bearer <token>` with a
-// constant-time comparison.
-func requireBearer(token string, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

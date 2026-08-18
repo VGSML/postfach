@@ -16,8 +16,6 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_GUARD_LLM_MODEL` | no | Model id of a guard LLM served over an OpenAI-compatible API (enables the multilingual screener), e.g. `qwen3guard-gen-0.6b`. |
 | `POSTFACH_GUARD_LLM_URL` | no | Base URL of that API. Default `http://localhost:1234/v1` (LM Studio); Ollama is `http://localhost:11434/v1`. |
 | `POSTFACH_DOC_LINK_TEMPLATE` | no | URL template for opening saved documents from the spreadsheet; `{filename}` is replaced (URL-escaped). Default: Google Drive exact-name search. |
-| `POSTFACH_HTTP_ADDR` | no | Serve streamable HTTP MCP on this address (endpoint `/mcp`) instead of stdio — for remote connectors (ChatGPT developer mode). |
-| `POSTFACH_HTTP_TOKEN` | with HTTP | Mandatory bearer token (min 16 chars) for HTTP mode; the server refuses to start without it. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
@@ -63,18 +61,9 @@ directly. Two ways in:
   (gitignored). Add this directory as a local marketplace in developer
   mode and install the `postfach` plugin.
 
-For genuinely remote setups (server on another machine) there is also a
-streamable HTTP mode:
-
-```sh
-POSTFACH_HTTP_ADDR=127.0.0.1:8787 POSTFACH_HTTP_TOKEN="$(openssl rand -hex 24)" \
-  sh -c 'set -a; source .env; ./postfach-mcp'
-```
-
-serving MCP at `/mcp` behind a mandatory bearer token (put a tunnel or
-reverse proxy in front). The full screening chain applies regardless of
-transport. Releases are cut by tagging `v*` (see
-`.github/workflows/release.yml`).
+Releases are cut by tagging `v*` (see `.github/workflows/release.yml`).
+A remote MCP service (streamable HTTP, auth, multi-tenant) is the end goal
+but a separate stage — the tool layer is transport-agnostic by design.
 
 ## Build & run
 
