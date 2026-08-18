@@ -5,21 +5,5 @@
   "author": {
     "name": "hugr-lab"
   },
-  "homepage": "https://github.com/hugr-lab/postfach",
-  "mcpServers": {
-    "postfach": {
-      "command": "${CLAUDE_PLUGIN_ROOT}/postfach-mcp",
-      "env": {
-        "POSTFACH_IMAP_URL": "${POSTFACH_IMAP_URL:-}",
-        "POSTFACH_ATTACHMENTS_DIR": "${POSTFACH_ATTACHMENTS_DIR:-}",
-        "POSTFACH_ALLOWED_LANGS": "${POSTFACH_ALLOWED_LANGS:-}",
-        "POSTFACH_MAX_INLINE_MB": "${POSTFACH_MAX_INLINE_MB:-}",
-        "POSTFACH_DOC_LINK_TEMPLATE": "${POSTFACH_DOC_LINK_TEMPLATE:-}",
-        "POSTFACH_PG2_MODEL": "${POSTFACH_PG2_MODEL:-}",
-        "POSTFACH_ORT_LIB": "${POSTFACH_ORT_LIB:-}",
-        "POSTFACH_GUARD_LLM_MODEL": "${POSTFACH_GUARD_LLM_MODEL:-}",
-        "POSTFACH_GUARD_LLM_URL": "${POSTFACH_GUARD_LLM_URL:-}"
-      }
-    }
-  }
+  "homepage": "https://github.com/hugr-lab/postfach"
 }

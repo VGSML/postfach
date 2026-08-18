@@ -37,8 +37,16 @@ cd postfach && ./install.sh
 installer asks for the mailbox, folders, screening models (Prompt Guard 2
 variant, guard LLM auto-detected from LM Studio/Ollama) and the language
 allowlist, downloads what is missing, smoke-tests the server and offers to
-register it with Claude Code. Non-interactive: `./install.sh --yes` with
-config in env.
+register it everywhere it can:
+
+| Surface | Mechanism | Notes |
+|---|---|---|
+| Claude Code (all projects) | `claude mcp add --scope user` | restart/reconnect the session |
+| Claude Code skill + commands | local plugin marketplace + `claude plugin install postfach@hugr-lab` | `postfach-mail` skill, `/postfach:setup`, `/postfach:remove` |
+| Claude Desktop | entry in `claude_desktop_config.json` | restart the Claude app; skills are not installable there from a folder |
+| ChatGPT / Codex | `codex mcp add` (`~/.codex/config.toml`) | restart the ChatGPT app, developer mode required; the skill comes via the Codex plugin (local marketplace) |
+
+Non-interactive: `./install.sh --yes` with config in env.
 
 **As a Claude Code plugin** (adds the `postfach-mail` skill that teaches
 the model the processing workflow, and `/postfach:setup`):

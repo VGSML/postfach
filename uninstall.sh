@@ -38,10 +38,36 @@ fi
 
 # --- registrations ---------------------------------------------------------
 if command -v claude >/dev/null; then
-  if claude mcp remove postfach >/dev/null 2>&1; then
-    say "removed the Claude Code registration (claude mcp remove postfach)"
+  found=0
+  for scope in user local project; do
+    if claude mcp remove -s "$scope" postfach >/dev/null 2>&1; then found=1; fi
+  done
+  if [ "$found" = 1 ]; then
+    say "removed the Claude Code registration(s)"
   else
     say "no Claude Code registration found"
+  fi
+  if claude plugin uninstall postfach@hugr-lab >/dev/null 2>&1; then
+    say "uninstalled the postfach plugin"
+  fi
+  claude plugin marketplace remove hugr-lab >/dev/null 2>&1 || true
+fi
+
+# Claude Desktop config entry.
+DESKTOP_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+if [ -f "$DESKTOP_CFG" ] && command -v python3 >/dev/null; then
+  if python3 -c '
+import json, sys
+path = sys.argv[1]
+with open(path) as f:
+    cfg = json.load(f)
+if "postfach" not in cfg.get("mcpServers", {}):
+    sys.exit(1)
+del cfg["mcpServers"]["postfach"]
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+' "$DESKTOP_CFG" 2>/dev/null; then
+    say "removed the Claude Desktop registration (restart the Claude app)"
   fi
 fi
 if command -v codex >/dev/null; then

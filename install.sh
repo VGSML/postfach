@@ -208,23 +208,63 @@ TOOLS=$(echo "$SMOKE" | grep -o '"name":"[a-z_]*"' | sort -u | wc -l | tr -d ' '
 say "server OK: $TOOLS tools registered"
 grep -E 'language allowlist|prompt guard|guard LLM' /tmp/postfach-install-smoke.log | sed 's/^/    /' || true
 
-# --- register with Claude Code / Codex ------------------------------------
+# --- register --------------------------------------------------------------
+confirm() { # confirm "question"
+  if [ "$YES" = 1 ]; then return 0; fi
+  local reply
+  read -r -p "$1 [y/N] " reply
+  [ "$reply" = "y" ] || [ "$reply" = "Y" ]
+}
+
+# Claude Code (user scope: visible in every Claude Code session) + plugin
+# (the postfach-mail skill and /postfach:* commands).
 if [ "$REGISTER" = 1 ] && command -v claude >/dev/null; then
-  if [ "$YES" = 1 ]; then REPLY=y; else read -r -p "Register with Claude Code now (claude mcp add postfach)? [y/N] " REPLY; fi
-  if [ "${REPLY:-n}" = "y" ] || [ "${REPLY:-n}" = "Y" ]; then
+  if confirm "Register with Claude Code (all projects) and install the skill plugin?"; then
     ENV_ARGS=(); for kv in "${ENV_KV[@]}"; do ENV_ARGS+=( -e "$kv" ); done
-    claude mcp remove postfach >/dev/null 2>&1 || true
-    claude mcp add postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
-    say "registered with Claude Code"
+    claude mcp remove -s user postfach >/dev/null 2>&1 || true
+    claude mcp remove -s local postfach >/dev/null 2>&1 || true
+    claude mcp add --scope user postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
+    say "registered with Claude Code (user scope)"
+    if claude plugin marketplace add "$ROOT" >/dev/null 2>&1 || claude plugin marketplace update hugr-lab >/dev/null 2>&1; then
+      if claude plugin install postfach@hugr-lab >/dev/null 2>&1; then
+        say "installed the postfach plugin (postfach-mail skill, /postfach:setup, /postfach:remove)"
+      else
+        warn "plugin install failed; skill unavailable (try /plugin install postfach@hugr-lab in a session)"
+      fi
+    else
+      warn "could not add the local plugin marketplace; skill unavailable"
+    fi
   fi
 fi
+
+# Claude Desktop (separate config file; restart the app afterwards).
+DESKTOP_CFG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
+if [ "$REGISTER" = 1 ] && [ -e "$(dirname "$DESKTOP_CFG")" ] && command -v python3 >/dev/null; then
+  if confirm "Register with Claude Desktop ($DESKTOP_CFG)?"; then
+    printf '%s\0' "${ENV_KV[@]}" | python3 -c '
+import json, os, sys
+path = sys.argv[1]
+pairs = [s for s in sys.stdin.buffer.read().decode().split("\0") if s]
+env = dict(s.split("=", 1) for s in pairs)
+cfg = {}
+if os.path.exists(path):
+    with open(path) as f:
+        cfg = json.load(f)
+cfg.setdefault("mcpServers", {})["postfach"] = {"command": sys.argv[2], "env": env}
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+' "$DESKTOP_CFG" "$ROOT/postfach-mcp"
+    say "registered with Claude Desktop — restart the Claude app to pick it up"
+  fi
+fi
+
+# ChatGPT/Codex (global config shared by the desktop app, CLI and IDE).
 if [ "$REGISTER" = 1 ] && command -v codex >/dev/null; then
-  if [ "$YES" = 1 ]; then REPLY=y; else read -r -p "Register with ChatGPT/Codex now (codex mcp add postfach)? [y/N] " REPLY; fi
-  if [ "${REPLY:-n}" = "y" ] || [ "${REPLY:-n}" = "Y" ]; then
+  if confirm "Register with ChatGPT/Codex (codex mcp add postfach)?"; then
     ENV_ARGS=(); for kv in "${ENV_KV[@]}"; do ENV_ARGS+=( --env "$kv" ); done
     codex mcp remove postfach >/dev/null 2>&1 || true
     codex mcp add postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
-    say "registered with ChatGPT/Codex"
+    say "registered with ChatGPT/Codex — restart the ChatGPT app (developer mode must be enabled)"
   fi
 fi
 
