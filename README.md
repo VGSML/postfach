@@ -12,7 +12,7 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_IMAP_URL` | yes | `imaps://user:password@imap.example.com:993` (`imap://` uses STARTTLS on 143). URL-escape special characters in the password. |
 | `POSTFACH_ATTACHMENTS_DIR` | no | Where `save_attachment` writes files. Default `./attachments`. |
 | `POSTFACH_MAX_INLINE_MB` | no | Size cap for `read_attachment`, default 5. |
-| `POSTFACH_ALLOWED_LANGS` | no | Language allowlist for the screening gate, default `en,de,ru`. Comma-separated ISO codes; `any` disables the gate. |
+| `POSTFACH_ALLOWED_LANGS` | no | Language allowlist for the screening gate, default `en,de,fr,it,es,ru`. Comma-separated ISO codes; `any` disables the gate. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
@@ -81,6 +81,16 @@ tool result:
   for longer texts, statistically detected disallowed languages. An
   injection in a language the classifier was not trained on must not be
   trusted just because the classifier is silent;
+
+  Measured PG2-86M (quantized) injection detection per language — the
+  default allowlist is the reliable set:
+
+  | Reliable (in default) | Inconsistent (opt-in with care) |
+  |---|---|
+  | en 0.99, de 0.99, fr 0.90–0.99, it 0.99, es 0.99, ru 0.96, (cs 0.98–0.99*) | pt 0.05–0.98, pl 0.47–0.99, nl 0.002–0.99 |
+
+  \* cs measured reliable but not officially trained; add it via env if
+  needed. Officially trained set: en, fr, de, hi, it, pt, es, th.
 - flagged text is **redacted by default**; pass `include_flagged_content=true`
   to read it anyway — the result then carries a `screening` verdict so the
   client can treat it accordingly;

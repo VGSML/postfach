@@ -34,11 +34,12 @@ func main() {
 	screener := screen.Chain{screen.NewHeuristic()}
 	// Languages the screening stack can actually vet. Text in any other
 	// language/script is flagged: an injection we cannot screen is an
-	// injection we must not trust. Default en,de,ru; POSTFACH_ALLOWED_LANGS
-	// overrides ("any" disables the gate).
+	// injection we must not trust. The default is the set where PG2-86M
+	// (quantized) scored reliably in our probes — see README for the
+	// measured table. POSTFACH_ALLOWED_LANGS overrides ("any" disables).
 	langs := os.Getenv("POSTFACH_ALLOWED_LANGS")
 	if langs == "" {
-		langs = "en,de,ru"
+		langs = "en,de,fr,it,es,ru"
 	}
 	if langs == "any" || langs == "*" {
 		log.Printf("language gate disabled (POSTFACH_ALLOWED_LANGS=%s)", langs)
