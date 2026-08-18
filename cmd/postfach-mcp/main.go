@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mark3labs/mcp-go/server"
@@ -59,13 +60,38 @@ func main() {
 		screener = append(screener, pg)
 		log.Printf("prompt guard 2 classifier enabled")
 	} else {
-		log.Printf("prompt guard 2 classifier disabled (POSTFACH_PG2_MODEL not set); heuristics only")
+		log.Printf("prompt guard 2 classifier disabled (POSTFACH_PG2_MODEL not set)")
+	}
+	// Guard LLM (e.g. Qwen3Guard via LM Studio/Ollama, OpenAI-compatible
+	// API) — multilingual coverage beyond PG2's reliable set.
+	llm, err := screen.NewLLMGuardFromEnv()
+	if err != nil {
+		log.Fatalf("guard LLM: %v", err)
+	}
+	if llm != nil {
+		screener = append(screener, llm)
+		log.Printf("guard LLM enabled: %s", os.Getenv("POSTFACH_GUARD_LLM_MODEL"))
+	} else {
+		log.Printf("guard LLM disabled (POSTFACH_GUARD_LLM_MODEL not set)")
+	}
+
+	// Verdict cache: identical content is screened once. The fingerprint
+	// covers everything that changes verdicts.
+	fingerprint := strings.Join([]string{
+		"v1", langs,
+		os.Getenv("POSTFACH_PG2_MODEL"), os.Getenv("POSTFACH_PG2_THRESHOLD"),
+		os.Getenv("POSTFACH_GUARD_LLM_MODEL"),
+	}, "|")
+	cached, err := screen.NewCache(screener, fingerprint,
+		filepath.Join(cfg.AttachmentsDir, "screening_cache.jsonl"))
+	if err != nil {
+		log.Fatalf("screening cache: %v", err)
 	}
 
 	s := server.NewMCPServer("postfach", version,
 		server.WithToolCapabilities(true),
 	)
-	tools.New(cfg, screener).Register(s)
+	tools.New(cfg, cached).Register(s)
 
 	if err := server.ServeStdio(s); err != nil {
 		fmt.Fprintf(os.Stderr, "postfach-mcp error: %v\n", err)

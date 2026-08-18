@@ -1,24 +1,39 @@
 package screen
 
-// chunkIDs splits a token-id sequence into windows of at most size tokens,
-// with overlap tokens shared between consecutive windows, so an injection
+// chunkSlice splits items into windows of at most size elements, with
+// overlap elements shared between consecutive windows, so a fragment
 // spanning a window boundary is still seen in one piece. size must be
 // greater than overlap.
-func chunkIDs(ids []uint32, size, overlap int) [][]uint32 {
-	if len(ids) == 0 {
+func chunkSlice[T any](items []T, size, overlap int) [][]T {
+	if len(items) == 0 {
 		return nil
 	}
-	if len(ids) <= size {
-		return [][]uint32{ids}
+	if len(items) <= size {
+		return [][]T{items}
 	}
 	step := size - overlap
-	var out [][]uint32
-	for start := 0; start < len(ids); start += step {
-		end := min(start+size, len(ids))
-		out = append(out, ids[start:end])
-		if end == len(ids) {
+	var out [][]T
+	for start := 0; start < len(items); start += step {
+		end := min(start+size, len(items))
+		out = append(out, items[start:end])
+		if end == len(items) {
 			break
 		}
+	}
+	return out
+}
+
+// chunkIDs is chunkSlice for token ids (kept for readability at call sites).
+func chunkIDs(ids []uint32, size, overlap int) [][]uint32 {
+	return chunkSlice(ids, size, overlap)
+}
+
+// chunkRunes splits text into rune windows and returns them as strings.
+func chunkRunes(s string, size, overlap int) []string {
+	runes := chunkSlice([]rune(s), size, overlap)
+	out := make([]string, len(runes))
+	for i, r := range runes {
+		out[i] = string(r)
 	}
 	return out
 }

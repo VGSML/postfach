@@ -45,6 +45,7 @@ var iso1to3 = map[string]string{
 	"no": "nob", "fi": "fin", "hu": "hun", "ro": "ron", "bg": "bul",
 	"el": "ell", "he": "heb", "ar": "arb", "hi": "hin", "th": "tha",
 	"zh": "cmn", "ja": "jpn", "ko": "kor", "vi": "vie", "id": "ind",
+	"lt": "lit", "lv": "lav", "et": "est", "sl": "slv", "hr": "hrv",
 }
 
 // langScripts lists the scripts each supported language is written in.
@@ -56,7 +57,8 @@ var langScripts = map[string][]*unicode.RangeTable{
 	"slk": {unicode.Latin}, "tur": {unicode.Latin}, "swe": {unicode.Latin},
 	"dan": {unicode.Latin}, "nob": {unicode.Latin}, "fin": {unicode.Latin},
 	"hun": {unicode.Latin}, "ron": {unicode.Latin}, "vie": {unicode.Latin},
-	"ind": {unicode.Latin},
+	"ind": {unicode.Latin}, "lit": {unicode.Latin}, "lav": {unicode.Latin},
+	"est": {unicode.Latin}, "slv": {unicode.Latin}, "hrv": {unicode.Latin},
 	"rus": {unicode.Cyrillic}, "ukr": {unicode.Cyrillic}, "bul": {unicode.Cyrillic},
 	"ell": {unicode.Greek},
 	"heb": {unicode.Hebrew},
