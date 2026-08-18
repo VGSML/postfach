@@ -13,6 +13,8 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_ATTACHMENTS_DIR` | no | Where `save_attachment` writes files. Default `./attachments`. |
 | `POSTFACH_MAX_INLINE_MB` | no | Size cap for `read_attachment`, default 5. |
 | `POSTFACH_ALLOWED_LANGS` | no | Language allowlist for the screening gate, default `en,de,fr,it,es,ru`. Comma-separated ISO codes; `any` disables the gate. |
+| `POSTFACH_GUARD_LLM_MODEL` | no | Model id of a guard LLM served over an OpenAI-compatible API (enables the multilingual screener), e.g. `qwen3guard-gen-0.6b`. |
+| `POSTFACH_GUARD_LLM_URL` | no | Base URL of that API. Default `http://localhost:1234/v1` (LM Studio); Ollama is `http://localhost:11434/v1`. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
@@ -60,6 +62,7 @@ messages are never marked as seen.
 - `list_messages(mailbox="INBOX", limit=20, unseen_only=false, since_uid=0, since_date="")` — newest messages first: uid, dates (envelope + server internal), from, subject, flags, size, plus the mailbox `uid_validity`. `since_uid` + `uid_validity` form the incremental-sync cursor for ingestion loops; `since_date` filters by server receive time.
 - `read_message(uid, mailbox="INBOX", body_offset=0, body_limit=4000)` — headers, one page of the text body (character-based pagination with `body_total_chars` / `body_next_offset`), and the attachment list with per-attachment `sha256`. The full body is always screened regardless of the requested page.
 - `read_attachment(uid, attachment_index, mailbox="INBOX", offset=0, limit=4000)` — returns the attachment inline with its MIME type and `sha256`: text/XML (incl. e-invoice XML) as screened, paginated text; images as image content; PDFs and other binaries as base64 blobs. Capped by `POSTFACH_MAX_INLINE_MB`.
+- `read_quarantined(uid, attachment_index=-1, mailbox="INBOX", offset=0, limit=4000)` — the escape hatch for blocked content (e.g. language outside the allowlist): returns the body or a text attachment in **defused** form — whitespace replaced with `ˆ` markers, long unbroken runs (CJK) split, every line prefixed with `❯` (spotlighting/datamarking), so embedded instructions read as data. The screening verdict is always attached.
 - `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR`, appends a record (uid, filename, path, `sha256`, sender, screening verdict) to `registry.jsonl` there, and deduplicates by hash: identical content is not written twice.
 
 Planned for the invoice-mailbox use case: `get_attached_erechnung` — parse
@@ -91,9 +94,38 @@ tool result:
 
   \* cs measured reliable but not officially trained; add it via env if
   needed. Officially trained set: en, fr, de, hi, it, pt, es, th.
-- flagged text is **redacted by default**; pass `include_flagged_content=true`
-  to read it anyway — the result then carries a `screening` verdict so the
-  client can treat it accordingly;
+
+### Full-EU coverage with a guard LLM
+
+For languages beyond PG2's reliable set (Scandinavia, Eastern Europe, the
+Baltics), a second screener runs a local guard LLM over an OpenAI-compatible
+API — LM Studio or Ollama, same `Screener` interface, no extra build deps.
+Measured with **Qwen3Guard-Gen 0.6B** (Q8 GGUF in LM Studio, ~70 ms/call):
+injections in da, sv, no, fi, nl, pl, cs, hu, ro, bg, el, lt, lv, et, pt and
+zh — **16/16 caught, 0 false positives** on benign invoices in 15 languages,
+including the exact pt/nl phrasings PG2 misses. Scanning is two-scale
+(coarse 1200-rune windows + sentence-packed ~200-rune blocks), which catches
+tail and mid-text injections in long benign emails.
+
+Setup (LM Studio): download `Qwen3Guard-Gen-0.6B.Q8_0.gguf` from
+`QuantFactory/Qwen3Guard-Gen-0.6B-GGUF` into
+`~/.lmstudio/models/QuantFactory/Qwen3Guard-Gen-0.6B-GGUF/`, then run with:
+
+```sh
+POSTFACH_GUARD_LLM_MODEL=qwen3guard-gen-0.6b \
+POSTFACH_ALLOWED_LANGS=en,de,fr,it,es,pt,nl,pl,cs,sk,da,sv,no,fi,hu,ro,bg,el,hr,sl,lt,lv,et,ru \
+./postfach-mcp
+```
+
+Widen `POSTFACH_ALLOWED_LANGS` only together with the guard LLM — the
+allowlist must always match what the screening stack can actually vet.
+- flagged text is **redacted by default**; the recommended way to inspect it
+  is `read_quarantined` (defused form); `include_flagged_content=true`
+  returns the raw text and should be a last resort;
+- screening verdicts are **cached by content hash**
+  (`screening_cache.jsonl` in the attachments dir), so a message is
+  screened by the models once, no matter how often it is listed, read or
+  paged through; the cache key includes the screener configuration;
 - attachment filenames are sanitized against path traversal; flagged names
   are replaced with generated ones; files are written with mode 0600 and
   never interpreted.

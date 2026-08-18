@@ -15,7 +15,7 @@ Postfach is an MCP (Model Context Protocol) server that exposes tools for workin
 - **Go** (parent `../go.work` pins `go 1.26.1`; this module is listed in it), single binary, no sidecars.
 - **MCP:** `github.com/mark3labs/mcp-go` — same library and pattern as sibling `hub`: `server.NewMCPServer` + `server.ServeStdio`, entrypoint `cmd/postfach-mcp`.
 - **Mail:** `github.com/emersion/go-imap/v2` (IMAP) + `github.com/emersion/go-message` (MIME/attachments) in `internal/mail`.
-- **Screening** (`internal/screen`): `Screener` interface, chain of two layers — regex heuristics (EN/RU/DE, always on) and **Llama Prompt Guard 2 86M** int8 ONNX via `github.com/yalue/onnxruntime_go` + `github.com/daulet/tokenizers`, compiled only with **build tag `promptguard`** (the default build has a stub and needs no native deps).
+- **Screening** (`internal/screen`): `Screener` interface, a chain of layers — regex heuristics (EN/RU/DE, always on), the language allowlist gate, **Llama Prompt Guard 2 86M** int8 ONNX via `github.com/yalue/onnxruntime_go` + `github.com/daulet/tokenizers` (build tag `promptguard`; default build has a stub, no native deps), and a **guard LLM** (`llmguard.go`, Qwen3Guard-Gen over an OpenAI-compatible API — LM Studio/Ollama — enabled by `POSTFACH_GUARD_LLM_MODEL`, plain HTTP, no build tag). The whole chain is wrapped in a **verdict cache** (`cache.go`, JSONL in the attachments dir) keyed by content hash + config fingerprint — extend the fingerprint in `main.go` when adding anything that changes verdicts.
 - Model and native libs are **not committed**: `make fetch-model` / `make deps-guard` download them into `models/` and `third_party/` (gitignored).
 
 ### Prompt Guard 2 facts (measured, design around them)
@@ -25,6 +25,13 @@ Postfach is an MCP (Model Context Protocol) server that exposes tools for workin
 - **ORT version coupling:** the `onnxruntime` release downloaded by the Makefile must match the ORT API version `yalue/onnxruntime_go` expects (v1.33 → ORT 1.29). A mismatch fails at init with "requested API version".
 - **Language coverage decides the variant and the allowlist.** 86M (mDeBERTa, default): measured reliable on en/de/fr/it/es (0.90–0.99), plus ru 0.96 and cs 0.98 beyond its official training set; inconsistent on pt (0.05–0.98 — despite being officially trained), pl (0.47–0.99) and nl — the default `POSTFACH_ALLOWED_LANGS` is the reliable set, don't widen it without re-probing (measurements were on the quantized export; single-sentence probes, re-verify on model updates). The 22M variant (`make fetch-model PG2_VARIANT=22m`) is 4× smaller, ~2× faster and more dilution-resistant, but **blind to non-English injections** (DE scores 0.003) — never use it for the German invoice mailbox. The `Screener` interface allows swapping in another model (e.g. Qwen3Guard) later.
 - Tokenizer is loaded with truncation/padding stripped from `tokenizer.json` (`loadTokenizerNoTruncation`) so long texts tokenize fully — keep it that way, silent truncation defeats chunking.
+
+### Guard LLM facts (measured with Qwen3Guard-Gen 0.6B Q8)
+
+- **EU coverage:** 16/16 injections caught (da, sv, no, fi, nl, pl, cs, hu, ro, bg, el, lt, lv, et, pt, zh), 0 false positives on benign invoices in 15 languages, ~70 ms/call via LM Studio. This is what justifies widening `POSTFACH_ALLOWED_LANGS` beyond PG2's set.
+- **Verdict parsing policy** (`llmguard.go`): `Unsafe` always flags; `Controversial` flags only with an attack-shaped category (jailbreak/injection/illegal/crime). Benign invoices routinely come back `Controversial | PII` — PII is content, not an attack; don't "fix" that by flagging all Controversial (measured: it flags pure benign text).
+- **Dilution applies to guard LLMs too:** a tail injection in a 6000-char email is missed by 900+-rune windows. Hence two scales: coarse 1200-rune windows + sentence-packed ~200-rune blocks (`segments()`), which catches tail and mid-text injections.
+- **Quarantine path:** `read_quarantined` returns blocked content defused (`Defuse`: datamarking + line prefixes), never raw; defusing is the protection there, not redaction.
 
 ### go.work gotcha (important)
 
