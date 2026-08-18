@@ -17,6 +17,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 
 	"github.com/hugr-lab/postfach/internal/config"
+	"github.com/hugr-lab/postfach/internal/ledger"
 	"github.com/hugr-lab/postfach/internal/mail"
 	"github.com/hugr-lab/postfach/internal/screen"
 )
@@ -29,10 +30,11 @@ const redactedNotice = "[REDACTED by postfach: content was flagged as potential 
 type Tools struct {
 	cfg      *config.Config
 	screener screen.Screener
+	ledger   *ledger.Ledger
 }
 
 func New(cfg *config.Config, s screen.Screener) *Tools {
-	return &Tools{cfg: cfg, screener: s}
+	return &Tools{cfg: cfg, screener: s, ledger: ledger.New(cfg.AttachmentsDir)}
 }
 
 // Register adds all postfach tools to the MCP server.
@@ -96,6 +98,8 @@ func (t *Tools) Register(s *server.MCPServer) {
 		mcp.WithNumber("attachment_index", mcp.Required(), mcp.Description("Attachment index as returned by read_message")),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
 	), t.handleSaveAttachment)
+
+	t.registerInvoiceTools(s)
 }
 
 // guard screens one untrusted string and applies the redaction policy.
@@ -366,8 +370,57 @@ func (t *Tools) handleReadAttachment(ctx context.Context, req mcp.CallToolReques
 	}
 
 	meta["sha256"] = att.SHA256
+	if att.Via != "" {
+		meta["via"] = att.Via
+	}
 
 	switch {
+	case mail.IsNestedMessage(mimeType, att.Filename):
+		// Unwrap the embedded email into a structured view instead of a blob.
+		nested, err := mail.Parse(data)
+		if err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("parse embedded message: %v", err)), nil
+		}
+		subject, v1, err := t.guard(ctx, nested.Subject, includeFlagged)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		from, v2, err := t.guard(ctx, nested.From, includeFlagged)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		body, v3, err := t.guard(ctx, nested.TextBody, includeFlagged)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		verdict.Merge(v1)
+		verdict.Merge(v2)
+		verdict.Merge(v3)
+		page, totalChars, nextOffset, hasMore := pageText(body,
+			argInt(args, "offset", 0), argInt(args, "limit", defaultPageChars))
+		meta["embedded_message"] = map[string]any{
+			"subject": subject,
+			"from":    from,
+			"to":      screen.StripInvisible(nested.To),
+			"date":    nested.Date,
+		}
+		meta["note"] = "embedded email unwrapped; its attachments are addressable via the PARENT message's " +
+			"flattened attachment list (entries with matching `via`)"
+		meta["total_chars"] = totalChars
+		meta["offset"] = argInt(args, "offset", 0)
+		if hasMore {
+			meta["has_more"] = true
+			meta["next_offset"] = nextOffset
+		}
+		if verdict.Flagged {
+			meta["screening"] = verdict
+		}
+		metaJSON, _ := json.MarshalIndent(meta, "", "  ")
+		return &mcp.CallToolResult{Content: []mcp.Content{
+			mcp.TextContent{Type: "text", Text: string(metaJSON)},
+			mcp.TextContent{Type: "text", Text: page},
+		}}, nil
+
 	case isTextMIME(mimeType):
 		// Full content is screened; pagination only limits context usage.
 		body, bodyVerdict, err := t.guard(ctx, string(data), includeFlagged)

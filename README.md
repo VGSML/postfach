@@ -75,13 +75,31 @@ messages are never marked as seen.
 
 - `list_messages(mailbox="INBOX", limit=20, unseen_only=false, since_uid=0, since_date="")` — newest messages first: uid, dates (envelope + server internal), from, subject, flags, size, plus the mailbox `uid_validity`. `since_uid` + `uid_validity` form the incremental-sync cursor for ingestion loops; `since_date` filters by server receive time.
 - `read_message(uid, mailbox="INBOX", body_offset=0, body_limit=4000)` — headers, one page of the text body (character-based pagination with `body_total_chars` / `body_next_offset`), and the attachment list with per-attachment `sha256`. The full body is always screened regardless of the requested page.
-- `read_attachment(uid, attachment_index, mailbox="INBOX", offset=0, limit=4000)` — returns the attachment inline with its MIME type and `sha256`: text/XML (incl. e-invoice XML) as screened, paginated text; images as image content; PDFs and other binaries as base64 blobs. Capped by `POSTFACH_MAX_INLINE_MB`.
+- `read_attachment(uid, attachment_index, mailbox="INBOX", offset=0, limit=4000)` — returns the attachment inline with its MIME type and `sha256`: text/XML (incl. e-invoice XML) as screened, paginated text; images as image content; PDFs and other binaries as base64 blobs; embedded emails (`message/rfc822`, `.eml`) unwrapped into a structured view. Capped by `POSTFACH_MAX_INLINE_MB`.
 - `read_quarantined(uid, attachment_index=-1, mailbox="INBOX", offset=0, limit=4000)` — the escape hatch for blocked content (e.g. language outside the allowlist): returns the body or a text attachment in **defused** form — whitespace replaced with `ˆ` markers, long unbroken runs (CJK) split, every line prefixed with `❯` (spotlighting/datamarking), so embedded instructions read as data. The screening verdict is always attached.
 - `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR`, appends a record (uid, filename, path, `sha256`, sender, screening verdict) to `registry.jsonl` there, and deduplicates by hash: identical content is not written twice.
+- `get_attached_erechnung(uid, attachment_index?, mailbox="INBOX")` — parses e-invoice attachments on the Go side into structured JSON: XRechnung XML (UBL and CII syntax) and ZUGFeRD/Factur-X (XML embedded in PDF/A-3, extracted with pdfcpu). Plain PDFs without embedded XML are reported as such — read them with `read_attachment` and extract fields yourself.
 
-Planned for the invoice-mailbox use case: `get_attached_erechnung` — parse
-e-Rechnung XML (XRechnung UBL/CII, ZUGFeRD/Factur-X embedded in PDF/A-3) on
-the Go side into structured JSON instead of dumping raw XML into context.
+Nested `.eml` attachments are flattened into the parent message's
+attachment list (entries carry `via`), so a PDF inside a forwarded email is
+directly readable and savable.
+
+### Registries (client-defined)
+
+The server does not know what a "Rechnung" is. The client model owns the
+registry lifecycle and is configured by prompt ("read the mail, maintain a
+registry of invoices and one of Mahnungen ..."):
+
+- `add_registry(registry, description, fields=[{name, description}])` — create/document a registry; declared field order defines the spreadsheet columns.
+- `registries()` — list registries with descriptions, field docs and counts (call first in a new session).
+- `record_entry(registry, key, fields{...}, uid?, attachment_index?, sha256?, saved_path?)` — upsert by key; empty values never erase; undeclared fields are stored but reported back.
+- `list_entries(registry, limit=50)`, `remove_entry(registry, key)`, `drop_registry(registry)`.
+
+Storage: `registry-<name>.jsonl` (append-only journal, tombstoned deletes) +
+`registry-<name>.meta.json` (description, field docs, column order) in the
+attachments directory, and one workbook `Register.xlsx` with a sheet per
+registry, regenerated on every change — sync the folder with Google Drive
+and the registries are readable in Google Sheets.
 
 ## Security model
 

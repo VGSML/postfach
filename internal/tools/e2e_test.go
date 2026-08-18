@@ -25,9 +25,36 @@ import (
 )
 
 var (
-	pdfData = []byte("%PDF-1.4 fake invoice content for testing")
-	xmlData = []byte(`<?xml version="1.0"?><Invoice><ID>2026-0815</ID><Amount currency="EUR">1190.00</Amount></Invoice>`)
+	pdfData      = []byte("%PDF-1.4 fake invoice content for testing")
+	xmlData      = []byte(`<?xml version="1.0"?><Invoice><ID>2026-0815</ID><Amount currency="EUR">1190.00</Amount></Invoice>`)
+	innerPdfData = []byte("%PDF-1.4 nested invoice pdf inside forwarded eml")
 )
+
+const ciiE2ESample = `<?xml version="1.0" encoding="UTF-8"?>
+<rsm:CrossIndustryInvoice xmlns:rsm="urn:un:unece:uncefact:data:standard:CrossIndustryInvoice:100"
+    xmlns:ram="urn:un:unece:uncefact:data:standard:ReusableAggregateBusinessInformationEntity:100"
+    xmlns:udt="urn:un:unece:uncefact:data:standard:UnqualifiedDataType:100">
+  <rsm:ExchangedDocument>
+    <ram:ID>40023900</ram:ID>
+    <ram:TypeCode>380</ram:TypeCode>
+    <ram:IssueDateTime><udt:DateTimeString format="102">20260806</udt:DateTimeString></ram:IssueDateTime>
+  </rsm:ExchangedDocument>
+  <rsm:SupplyChainTradeTransaction>
+    <ram:ApplicableHeaderTradeAgreement>
+      <ram:SellerTradeParty><ram:Name>Küchentechnik Karnick</ram:Name></ram:SellerTradeParty>
+      <ram:BuyerTradeParty><ram:Name>Schlossparkhotel Schkopau</ram:Name></ram:BuyerTradeParty>
+    </ram:ApplicableHeaderTradeAgreement>
+    <ram:ApplicableHeaderTradeSettlement>
+      <ram:InvoiceCurrencyCode>EUR</ram:InvoiceCurrencyCode>
+      <ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+        <ram:TaxBasisTotalAmount>420.00</ram:TaxBasisTotalAmount>
+        <ram:TaxTotalAmount currencyID="EUR">79.80</ram:TaxTotalAmount>
+        <ram:GrandTotalAmount>499.80</ram:GrandTotalAmount>
+        <ram:DuePayableAmount>499.80</ram:DuePayableAmount>
+      </ram:SpecifiedTradeSettlementHeaderMonetarySummation>
+    </ram:ApplicableHeaderTradeSettlement>
+  </rsm:SupplyChainTradeTransaction>
+</rsm:CrossIndustryInvoice>`
 
 type testAtt struct {
 	name, mime string
@@ -100,6 +127,18 @@ func startIMAPServer(t *testing.T) string {
 				"您好，请查收附件中的发票，非常感谢您的合作。", nil),
 			opts: imap.AppendOptions{Time: time.Date(2026, 8, 17, 10, 0, 0, 0, time.UTC)},
 		},
+		{
+			raw: buildMsg("forwarder@hotel.example", "Fwd: Rechnung 40023900",
+				"Hallo, ich leite die Rechnung der Werkstatt weiter, siehe Anhang.",
+				[]testAtt{
+					{"original.eml", "message/rfc822", []byte(buildMsg(
+						"Werkstatt <werkstatt@karnick.example>", "Rechnung 40023900",
+						"Sehr geehrte Damen und Herren, anbei unsere Rechnung 40023900 für die Reparatur.",
+						[]testAtt{{"inner-rechnung.pdf", "application/pdf", innerPdfData}}))},
+					{"rechnung_cii.xml", "application/xml", []byte(ciiE2ESample)},
+				}),
+			opts: imap.AppendOptions{Time: time.Date(2026, 8, 16, 10, 0, 0, 0, time.UTC)},
+		},
 	}
 	for _, m := range msgs {
 		if _, err := user.Append("INBOX", bytes.NewReader([]byte(m.raw)), &m.opts); err != nil {
@@ -124,7 +163,7 @@ func startIMAPServer(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-func newTestTools(t *testing.T, addr string) *Tools {
+func newTestTools(t *testing.T, addr string) (*Tools, string) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -134,12 +173,13 @@ func newTestTools(t *testing.T, addr string) *Tools {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dir := t.TempDir()
 	return New(&config.Config{
 		Host: host, Port: port, Insecure: true,
 		Username: "test@example.com", Password: "secret",
-		AttachmentsDir:      t.TempDir(),
+		AttachmentsDir:      dir,
 		MaxInlineAttachment: 5 << 20,
-	}, screen.Chain{screen.NewHeuristic(), gate})
+	}, screen.Chain{screen.NewHeuristic(), gate}), dir
 }
 
 type handler func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error)
@@ -169,42 +209,42 @@ func call(t *testing.T, h handler, args map[string]any) (map[string]any, *mcp.Ca
 }
 
 func TestE2E(t *testing.T) {
-	tl := newTestTools(t, startIMAPServer(t))
+	tl, attDir := newTestTools(t, startIMAPServer(t))
 
 	t.Run("list", func(t *testing.T) {
 		m, _ := call(t, tl.handleList, map[string]any{})
-		if m["count"].(float64) != 3 {
+		if m["count"].(float64) != 4 {
 			t.Fatalf("count = %v", m["count"])
 		}
 		if m["uid_validity"].(float64) == 0 {
 			t.Error("uid_validity missing")
 		}
 		msgs := m["messages"].([]any)
-		if uid := msgs[0].(map[string]any)["uid"].(float64); uid != 3 {
+		if uid := msgs[0].(map[string]any)["uid"].(float64); uid != 4 {
 			t.Errorf("newest first: got uid %v", uid)
 		}
-		if subj := msgs[2].(map[string]any)["subject"].(string); subj != "Rechnung 2026-0815" {
+		if subj := msgs[3].(map[string]any)["subject"].(string); subj != "Rechnung 2026-0815" {
 			t.Errorf("subject = %q", subj)
 		}
 	})
 
 	t.Run("list_unseen", func(t *testing.T) {
 		m, _ := call(t, tl.handleList, map[string]any{"unseen_only": true})
-		if m["count"].(float64) != 2 {
+		if m["count"].(float64) != 3 {
 			t.Errorf("unseen count = %v", m["count"])
 		}
 	})
 
 	t.Run("list_since_uid", func(t *testing.T) {
 		m, _ := call(t, tl.handleList, map[string]any{"since_uid": float64(1)})
-		if m["count"].(float64) != 2 {
+		if m["count"].(float64) != 3 {
 			t.Errorf("since_uid count = %v", m["count"])
 		}
 	})
 
 	t.Run("list_since_date", func(t *testing.T) {
 		m, _ := call(t, tl.handleList, map[string]any{"since_date": "2026-08-14"})
-		if m["count"].(float64) != 2 {
+		if m["count"].(float64) != 3 {
 			t.Errorf("since_date count = %v: %v", m["count"], m["messages"])
 		}
 	})
@@ -300,6 +340,123 @@ func TestE2E(t *testing.T) {
 		data, err := base64.StdEncoding.DecodeString(blob.Blob)
 		if err != nil || !bytes.Equal(data, pdfData) {
 			t.Errorf("blob roundtrip failed (err=%v)", err)
+		}
+	})
+
+	t.Run("nested_eml_flattened", func(t *testing.T) {
+		m, _ := call(t, tl.handleRead, map[string]any{"uid": float64(4)})
+		atts := m["attachments"].([]any)
+		if len(atts) != 3 {
+			t.Fatalf("attachments = %d, want 3 (eml + nested pdf + xml)", len(atts))
+		}
+		nested := atts[1].(map[string]any)
+		if nested["filename"].(string) != "inner-rechnung.pdf" || nested["via"].(string) != "original.eml" {
+			t.Errorf("nested attachment: %v", nested)
+		}
+	})
+
+	t.Run("read_attachment_eml_unwrapped", func(t *testing.T) {
+		m, res := call(t, tl.handleReadAttachment, map[string]any{"uid": float64(4), "attachment_index": float64(0)})
+		emb := m["embedded_message"].(map[string]any)
+		if emb["subject"].(string) != "Rechnung 40023900" {
+			t.Errorf("embedded subject: %v", emb)
+		}
+		if body := res.Content[1].(mcp.TextContent).Text; !strings.Contains(body, "40023900") {
+			t.Errorf("embedded body: %q", body)
+		}
+	})
+
+	t.Run("read_nested_pdf", func(t *testing.T) {
+		_, res := call(t, tl.handleReadAttachment, map[string]any{"uid": float64(4), "attachment_index": float64(1)})
+		emb, ok := res.Content[1].(mcp.EmbeddedResource)
+		if !ok {
+			t.Fatalf("second content is %T", res.Content[1])
+		}
+		data, err := base64.StdEncoding.DecodeString(emb.Resource.(mcp.BlobResourceContents).Blob)
+		if err != nil || !bytes.Equal(data, innerPdfData) {
+			t.Errorf("nested pdf roundtrip failed (err=%v)", err)
+		}
+	})
+
+	t.Run("get_attached_erechnung", func(t *testing.T) {
+		m, _ := call(t, tl.handleGetERechnung, map[string]any{"uid": float64(4)})
+		if m["count"].(float64) != 1 {
+			t.Fatalf("invoices found: %v", m["count"])
+		}
+		r := m["invoices"].([]any)[0].(map[string]any)
+		inv := r["invoice"].(map[string]any)
+		if inv["invoice_number"].(string) != "40023900" || inv["total_gross"].(string) != "499.80" {
+			t.Errorf("invoice: %v", inv)
+		}
+		if src := r["source"].(map[string]any); src["attachment_index"].(float64) != 2 {
+			t.Errorf("source: %v", src)
+		}
+	})
+
+	t.Run("registry_lifecycle", func(t *testing.T) {
+		m, _ := call(t, tl.handleAddRegistry, map[string]any{
+			"registry":    "rechnungen",
+			"description": "Eingehende Rechnungen des Hotels",
+			"fields": []any{
+				map[string]any{"name": "verkaeufer", "description": "Rechnungssteller"},
+				map[string]any{"name": "brutto", "description": "Bruttobetrag"},
+			},
+		})
+		if m["created"] != true {
+			t.Fatalf("add_registry: %v", m)
+		}
+
+		m, _ = call(t, tl.handleRecordEntry, map[string]any{
+			"registry": "rechnungen",
+			"key":      "40023900|Küchentechnik Karnick",
+			"fields":   map[string]any{"verkaeufer": "Küchentechnik Karnick", "brutto": "499.80"},
+			"uid":      float64(4),
+			"sha256":   "abc123",
+		})
+		if m["recorded"] != true || m["updated"] == true {
+			t.Fatalf("record: %v", m)
+		}
+
+		// Update same key with a new (undeclared) field.
+		m, _ = call(t, tl.handleRecordEntry, map[string]any{
+			"registry": "rechnungen",
+			"key":      "40023900|Küchentechnik Karnick",
+			"fields":   map[string]any{"status": "geprüft"},
+		})
+		if m["updated"] != true {
+			t.Fatalf("update: %v", m)
+		}
+		if und := m["undeclared_fields"].([]any); len(und) != 1 || und[0] != "status" {
+			t.Errorf("undeclared: %v", und)
+		}
+
+		m, _ = call(t, tl.handleListEntries, map[string]any{"registry": "rechnungen"})
+		if m["count"].(float64) != 1 {
+			t.Fatalf("entries: %v", m)
+		}
+		entry := m["entries"].([]any)[0].(map[string]any)
+		fields := entry["fields"].(map[string]any)
+		if fields["brutto"] != "499.80" || fields["status"] != "geprüft" {
+			t.Errorf("merged entry: %v", fields)
+		}
+
+		m, _ = call(t, tl.handleRegistries, map[string]any{})
+		regs := m["registries"].([]any)
+		if len(regs) != 1 || regs[0].(map[string]any)["description"].(string) == "" {
+			t.Errorf("registries: %v", regs)
+		}
+
+		if _, err := os.Stat(filepath.Join(attDir, "Register.xlsx")); err != nil {
+			t.Errorf("workbook missing: %v", err)
+		}
+
+		m, _ = call(t, tl.handleRemoveEntry, map[string]any{"registry": "rechnungen", "key": "40023900|Küchentechnik Karnick"})
+		if m["removed"] != true {
+			t.Errorf("remove: %v", m)
+		}
+		m, _ = call(t, tl.handleListEntries, map[string]any{"registry": "rechnungen"})
+		if m["count"].(float64) != 0 {
+			t.Errorf("after remove: %v", m)
 		}
 	})
 

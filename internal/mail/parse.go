@@ -15,15 +15,22 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
+// maxNestingDepth bounds recursion into message/rfc822 attachments so a
+// crafted eml-in-eml chain cannot blow the stack ("eml bomb").
+const maxNestingDepth = 3
+
 // Attachment describes one attachment without its content. SHA256 is
 // computed on the fly while the message is parsed, so read_message can
-// report it before anything is saved.
+// report it before anything is saved. Attachments found inside nested
+// message/rfc822 attachments are flattened into the same index space,
+// with Via naming the .eml they came from.
 type Attachment struct {
 	Index       int    `json:"index"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size_bytes"`
 	SHA256      string `json:"sha256,omitempty"`
+	Via         string `json:"via,omitempty"`
 }
 
 // Parsed is the decoded view of a message.
@@ -36,8 +43,78 @@ type Parsed struct {
 	Attachments []Attachment
 }
 
+// IsNestedMessage reports whether the attachment is an embedded email.
+func IsNestedMessage(contentType, filename string) bool {
+	switch contentType {
+	case "message/rfc822", "message/global":
+		return true
+	}
+	return strings.HasSuffix(strings.ToLower(filename), ".eml")
+}
+
+// part is one collected attachment with its content.
+type part struct {
+	meta Attachment
+	data []byte
+}
+
+// collectParts walks the message and returns all attachments depth-first,
+// recursing into nested message/rfc822 attachments. The traversal order is
+// deterministic and defines the attachment index space used by all tools.
+func collectParts(raw []byte, via string, depth int) ([]part, error) {
+	mr, err := mail.CreateReader(bytes.NewReader(raw))
+	if err != nil {
+		return nil, fmt.Errorf("parse message: %w", err)
+	}
+	var out []part
+	for {
+		p, err := mr.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			break // tolerate malformed sub-parts: return what we have
+		}
+		h, ok := p.Header.(*mail.AttachmentHeader)
+		if !ok {
+			continue
+		}
+		name, _ := h.Filename()
+		ctype, _, _ := h.ContentType()
+		data, err := io.ReadAll(p.Body)
+		if err != nil {
+			continue
+		}
+		sum := sha256.Sum256(data)
+		out = append(out, part{
+			meta: Attachment{
+				Filename:    name,
+				ContentType: ctype,
+				Size:        int64(len(data)),
+				SHA256:      hex.EncodeToString(sum[:]),
+				Via:         via,
+			},
+			data: data,
+		})
+		if IsNestedMessage(ctype, name) && depth < maxNestingDepth {
+			nestedVia := name
+			if nestedVia == "" {
+				nestedVia = "nested message"
+			}
+			if via != "" {
+				nestedVia = via + " > " + nestedVia
+			}
+			nested, err := collectParts(data, nestedVia, depth+1)
+			if err == nil {
+				out = append(out, nested...)
+			}
+		}
+	}
+	return out, nil
+}
+
 // Parse decodes an RFC 5322 message: headers, best-effort text body and the
-// attachment list (metadata only).
+// flattened attachment list (metadata only, nested .eml included).
 func Parse(raw []byte) (*Parsed, error) {
 	mr, err := mail.CreateReader(bytes.NewReader(raw))
 	if err != nil {
@@ -55,88 +132,55 @@ func Parse(raw []byte) (*Parsed, error) {
 	}
 
 	var htmlBody string
-	attIdx := 0
 	for {
-		part, err := mr.NextPart()
+		pt, err := mr.NextPart()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			// Tolerate malformed sub-parts: return what we decoded so far.
 			break
 		}
-		switch h := part.Header.(type) {
-		case *mail.InlineHeader:
+		if h, ok := pt.Header.(*mail.InlineHeader); ok {
 			ctype, _, _ := h.ContentType()
 			switch {
 			case ctype == "text/plain" && p.TextBody == "":
-				b, _ := io.ReadAll(part.Body)
+				b, _ := io.ReadAll(pt.Body)
 				p.TextBody = string(b)
 			case ctype == "text/html" && htmlBody == "":
-				b, _ := io.ReadAll(part.Body)
+				b, _ := io.ReadAll(pt.Body)
 				htmlBody = string(b)
 			}
-		case *mail.AttachmentHeader:
-			name, _ := h.Filename()
-			ctype, _, _ := h.ContentType()
-			hasher := sha256.New()
-			size, _ := io.Copy(hasher, part.Body)
-			p.Attachments = append(p.Attachments, Attachment{
-				Index:       attIdx,
-				Filename:    name,
-				ContentType: ctype,
-				Size:        size,
-				SHA256:      hex.EncodeToString(hasher.Sum(nil)),
-			})
-			attIdx++
 		}
 	}
 	if p.TextBody == "" && htmlBody != "" {
 		p.TextBody = htmlToText(htmlBody)
 	}
+
+	parts, err := collectParts(raw, "", 0)
+	if err != nil {
+		return nil, err
+	}
+	p.Attachments = make([]Attachment, len(parts))
+	for i, pt := range parts {
+		pt.meta.Index = i
+		p.Attachments[i] = pt.meta
+	}
 	return p, nil
 }
 
-// ExtractAttachment re-parses raw and returns the content of the attachment
-// with the given index (as reported by Parse).
+// ExtractAttachment returns the content of the attachment with the given
+// index in the flattened index space reported by Parse.
 func ExtractAttachment(raw []byte, index int) (Attachment, []byte, error) {
-	mr, err := mail.CreateReader(bytes.NewReader(raw))
+	parts, err := collectParts(raw, "", 0)
 	if err != nil {
-		return Attachment{}, nil, fmt.Errorf("parse message: %w", err)
+		return Attachment{}, nil, err
 	}
-	attIdx := 0
-	for {
-		part, err := mr.NextPart()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			break
-		}
-		h, ok := part.Header.(*mail.AttachmentHeader)
-		if !ok {
-			continue
-		}
-		if attIdx != index {
-			attIdx++
-			continue
-		}
-		name, _ := h.Filename()
-		ctype, _, _ := h.ContentType()
-		data, err := io.ReadAll(part.Body)
-		if err != nil {
-			return Attachment{}, nil, fmt.Errorf("read attachment %d: %w", index, err)
-		}
-		sum := sha256.Sum256(data)
-		return Attachment{
-			Index:       index,
-			Filename:    name,
-			ContentType: ctype,
-			Size:        int64(len(data)),
-			SHA256:      hex.EncodeToString(sum[:]),
-		}, data, nil
+	if index < 0 || index >= len(parts) {
+		return Attachment{}, nil, fmt.Errorf("attachment with index %d not found (message has %d)", index, len(parts))
 	}
-	return Attachment{}, nil, fmt.Errorf("attachment with index %d not found", index)
+	meta := parts[index].meta
+	meta.Index = index
+	return meta, parts[index].data, nil
 }
 
 func formatAddrs(addrs []*mail.Address) string {

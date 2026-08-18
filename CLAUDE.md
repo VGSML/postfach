@@ -14,7 +14,9 @@ Postfach is an MCP (Model Context Protocol) server that exposes tools for workin
 
 - **Go** (parent `../go.work` pins `go 1.26.1`; this module is listed in it), single binary, no sidecars.
 - **MCP:** `github.com/mark3labs/mcp-go` — same library and pattern as sibling `hub`: `server.NewMCPServer` + `server.ServeStdio`, entrypoint `cmd/postfach-mcp`.
-- **Mail:** `github.com/emersion/go-imap/v2` (IMAP) + `github.com/emersion/go-message` (MIME/attachments) in `internal/mail`.
+- **Mail:** `github.com/emersion/go-imap/v2` (IMAP) + `github.com/emersion/go-message` (MIME/attachments) in `internal/mail`. Nested `message/rfc822` attachments are flattened depth-first into ONE index space (`collectParts`, depth ≤ 3) — the traversal order is agent-visible API; changing it breaks stored attachment indices.
+- **E-invoices:** `internal/erechnung` parses XRechnung (UBL + CII) and ZUGFeRD/Factur-X (XML pulled from PDF/A-3 via `pdfcpu`). Amounts stay decimal strings.
+- **Registries:** `internal/ledger` stores client-defined registries (the model decides what registries exist and their fields — the server never hardcodes a schema): `registry-<name>.jsonl` journal + `.meta.json` (description/field docs/column order) + one `Register.xlsx` (sheet per registry, via `excelize`) regenerated on every change for Google-Sheets viewing through Drive sync.
 - **Screening** (`internal/screen`): `Screener` interface, a chain of layers — regex heuristics (EN/RU/DE, always on), the language allowlist gate, **Llama Prompt Guard 2 86M** int8 ONNX via `github.com/yalue/onnxruntime_go` + `github.com/daulet/tokenizers` (build tag `promptguard`; default build has a stub, no native deps), and a **guard LLM** (`llmguard.go`, Qwen3Guard-Gen over an OpenAI-compatible API — LM Studio/Ollama — enabled by `POSTFACH_GUARD_LLM_MODEL`, plain HTTP, no build tag). The whole chain is wrapped in a **verdict cache** (`cache.go`, JSONL in the attachments dir) keyed by content hash + config fingerprint — extend the fingerprint in `main.go` when adding anything that changes verdicts.
 - Model and native libs are **not committed**: `make fetch-model` / `make deps-guard` download them into `models/` and `third_party/` (gitignored).
 
@@ -72,5 +74,6 @@ between "compiles" and "works against a real mailbox". The
 
 ## Roadmap notes
 
-- First real deployment: an invoice mailbox (PDF + e-Rechnung XML). Planned tool `get_attached_erechnung`: parse XRechnung (UBL/CII) and ZUGFeRD/Factur-X (XML embedded in PDF/A-3) on the Go side into structured JSON instead of dumping raw XML into context.
+- First real deployment: an invoice mailbox (PDF + e-Rechnung XML), live at ict-invest.de. The model is configured by prompt: it creates registries (add_registry), reads mail incrementally (since_uid + uid_validity), parses e-invoices (get_attached_erechnung) or reads plain PDFs itself, saves files (save_attachment) and upserts registry entries (record_entry). Attachments dir is synced to Google Drive by the user; Register.xlsx shows up in Sheets.
 - `read_attachment` returns content inline (screened text / image / base64 blob) capped by `POSTFACH_MAX_INLINE_MB`; larger files go through `save_attachment`.
+- Known live FP: German legal disclaimers ("destroy this email") occasionally trigger the guard LLM (`Controversial | Illegal Acts`); the quarantine path keeps the cost low. Revisit the category filter if it becomes noisy.
