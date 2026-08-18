@@ -1,0 +1,9 @@
+{
+  "name": "postfach",
+  "version": "0.2.0",
+  "description": "Email mailbox MCP server with layered prompt-injection screening (heuristics, language allowlist, Prompt Guard 2, guard LLM), e-invoice parsing (XRechnung/ZUGFeRD/Factur-X) and client-defined registries rendered to Register.xlsx for Google Sheets via Drive sync.",
+  "author": {
+    "name": "hugr-lab"
+  },
+  "homepage": "https://github.com/VGSML/postfach"
+}

@@ -1,4 +1,6 @@
 /postfach-mcp
 /attachments/
 /models/
+/third_party/
 .env
+/.codex-plugin/mcp.json

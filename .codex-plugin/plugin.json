@@ -1,0 +1,12 @@
+{
+  "name": "postfach",
+  "version": "0.2.0",
+  "description": "Email mailbox tools with layered prompt-injection screening, e-invoice parsing (XRechnung/ZUGFeRD/Factur-X) and client-defined registries rendered to Register.xlsx for Google Sheets via Drive sync.",
+  "skills": "./skills/",
+  "mcpServers": "./.codex-plugin/mcp.json",
+  "interface": {
+    "displayName": "Postfach",
+    "shortDescription": "Read mail, screen for prompt injection, parse invoices, maintain registries",
+    "developerName": "hugr-lab"
+  }
+}
