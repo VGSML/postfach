@@ -226,6 +226,20 @@ func TestE2E(t *testing.T) {
 		if subj := msgs[3].(map[string]any)["subject"].(string); subj != "Rechnung 2026-0815" {
 			t.Errorf("subject = %q", subj)
 		}
+		if m["total_messages"].(float64) != 4 || m["matched"].(float64) != 4 {
+			t.Errorf("counters: total=%v matched=%v", m["total_messages"], m["matched"])
+		}
+		atts := msgs[3].(map[string]any)["attachments"].([]any)
+		if len(atts) != 2 {
+			t.Fatalf("listed attachments = %d, want 2", len(atts))
+		}
+		first := atts[0].(map[string]any)
+		if first["filename"].(string) != "rechnung.pdf" || first["content_type"].(string) != "application/pdf" {
+			t.Errorf("attachment ref: %v", first)
+		}
+		if first["size_bytes_encoded"].(float64) <= 0 {
+			t.Errorf("attachment size missing: %v", first)
+		}
 	})
 
 	t.Run("list_unseen", func(t *testing.T) {
@@ -237,8 +251,8 @@ func TestE2E(t *testing.T) {
 
 	t.Run("list_since_uid", func(t *testing.T) {
 		m, _ := call(t, tl.handleList, map[string]any{"since_uid": float64(1)})
-		if m["count"].(float64) != 3 {
-			t.Errorf("since_uid count = %v", m["count"])
+		if m["count"].(float64) != 3 || m["matched"].(float64) != 3 || m["total_messages"].(float64) != 4 {
+			t.Errorf("since_uid: count=%v matched=%v total=%v", m["count"], m["matched"], m["total_messages"])
 		}
 	})
 

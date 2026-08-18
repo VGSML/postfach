@@ -44,9 +44,11 @@ func New(cfg *config.Config, s screen.Screener) *Tools {
 // Register adds all postfach tools to the MCP server.
 func (t *Tools) Register(s *server.MCPServer) {
 	s.AddTool(mcp.NewTool("list_messages",
-		mcp.WithDescription("List the newest messages in a mailbox (newest first). Strictly read-only: never marks "+
-			"messages as seen. Returns uid_validity — UIDs are an incremental cursor only within one uid_validity "+
-			"generation. All returned text originates from untrusted email and is screened for prompt injection."),
+		mcp.WithDescription("List the newest messages in a mailbox (newest first), each with its attachments "+
+			"(name/type/encoded size from BODYSTRUCTURE — indices for reading come from read_message). Returns "+
+			"total_messages (mailbox size) and matched (messages satisfying the filters before the limit). Strictly "+
+			"read-only: never marks messages as seen. uid_validity + since_uid form the incremental cursor. All "+
+			"returned text originates from untrusted email and is screened for prompt injection."),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of messages to return (default 20, max 100)")),
 		mcp.WithBoolean("unseen_only", mcp.Description("Only list unread messages")),
@@ -223,6 +225,12 @@ func (t *Tools) handleList(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
+		for i := range s.Attachments {
+			s.Attachments[i].Filename, verdict, err = t.guardMerge(ctx, s.Attachments[i].Filename, includeFlagged, verdict)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+		}
 		item.Summary = s
 		if verdict.Flagged {
 			v := verdict
@@ -231,10 +239,12 @@ func (t *Tools) handleList(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		items = append(items, item)
 	}
 	return jsonResult(map[string]any{
-		"mailbox":      mailbox,
-		"uid_validity": res.UIDValidity,
-		"count":        len(items),
-		"messages":     items,
+		"mailbox":        mailbox,
+		"uid_validity":   res.UIDValidity,
+		"total_messages": res.TotalMessages,
+		"matched":        res.Matched,
+		"count":          len(items),
+		"messages":       items,
 	})
 }
 

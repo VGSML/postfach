@@ -3,6 +3,7 @@ package mail
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/emersion/go-imap/v2"
@@ -13,13 +14,24 @@ import (
 
 // Summary is a lightweight view of one message for list results.
 type Summary struct {
-	UID          uint32   `json:"uid"`
-	Date         string   `json:"date,omitempty"`
-	InternalDate string   `json:"internal_date,omitempty"`
-	From         string   `json:"from,omitempty"`
-	Subject      string   `json:"subject"`
-	Flags        []string `json:"flags,omitempty"`
-	Size         int64    `json:"size_bytes,omitempty"`
+	UID          uint32          `json:"uid"`
+	Date         string          `json:"date,omitempty"`
+	InternalDate string          `json:"internal_date,omitempty"`
+	From         string          `json:"from,omitempty"`
+	Subject      string          `json:"subject"`
+	Flags        []string        `json:"flags,omitempty"`
+	Size         int64           `json:"size_bytes,omitempty"`
+	Attachments  []AttachmentRef `json:"attachments,omitempty"`
+}
+
+// AttachmentRef is attachment metadata taken from BODYSTRUCTURE — no
+// content is downloaded for a listing. Size is the encoded transfer size
+// (base64 parts are ~33% larger than the decoded file). Indices for
+// read_attachment/save_attachment come from read_message, not from here.
+type AttachmentRef struct {
+	Filename    string `json:"filename"`
+	ContentType string `json:"content_type,omitempty"`
+	Size        uint32 `json:"size_bytes_encoded,omitempty"`
 }
 
 // ListOptions filters a mailbox listing. All reads are non-destructive:
@@ -38,10 +50,14 @@ type ListOptions struct {
 }
 
 // ListResult is a mailbox listing plus the UIDVALIDITY needed to know when
-// a SinceUID cursor must be reset.
+// a SinceUID cursor must be reset. TotalMessages is the mailbox size;
+// Matched counts messages satisfying the filters BEFORE the limit was
+// applied, so callers can tell "hit the limit" from "that was all".
 type ListResult struct {
-	UIDValidity uint32
-	Messages    []Summary
+	UIDValidity   uint32
+	TotalMessages uint32
+	Matched       int
+	Messages      []Summary
 }
 
 // Client is a thin wrapper over an authenticated IMAP connection.
@@ -87,7 +103,7 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("select %q: %w", mailbox, err)
 	}
-	res := &ListResult{UIDValidity: sel.UIDValidity, Messages: []Summary{}}
+	res := &ListResult{UIDValidity: sel.UIDValidity, TotalMessages: sel.NumMessages, Messages: []Summary{}}
 	if sel.NumMessages == 0 {
 		return res, nil
 	}
@@ -109,6 +125,7 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 			return nil, fmt.Errorf("uid search: %w", err)
 		}
 		uids := data.AllUIDs()
+		res.Matched = len(uids)
 		if len(uids) == 0 {
 			return res, nil
 		}
@@ -119,6 +136,7 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 		us.AddNum(uids...)
 		numSet = us
 	} else {
+		res.Matched = int(sel.NumMessages)
 		from := int64(1)
 		if n := int64(sel.NumMessages) - int64(o.Limit) + 1; n > 1 {
 			from = n
@@ -129,11 +147,12 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 	}
 
 	msgs, err := cl.c.Fetch(numSet, &imap.FetchOptions{
-		UID:          true,
-		Envelope:     true,
-		Flags:        true,
-		RFC822Size:   true,
-		InternalDate: true,
+		UID:           true,
+		Envelope:      true,
+		Flags:         true,
+		RFC822Size:    true,
+		InternalDate:  true,
+		BodyStructure: &imap.FetchItemBodyStructure{},
 	}).Collect()
 	if err != nil {
 		return nil, fmt.Errorf("fetch summaries: %w", err)
@@ -146,8 +165,9 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 			continue
 		}
 		s := Summary{
-			UID:  uint32(m.UID),
-			Size: m.RFC822Size,
+			UID:         uint32(m.UID),
+			Size:        m.RFC822Size,
+			Attachments: attachmentRefs(m.BodyStructure),
 		}
 		if !m.InternalDate.IsZero() {
 			s.InternalDate = m.InternalDate.Format(time.RFC3339)
@@ -172,6 +192,33 @@ func (cl *Client) List(mailbox string, o ListOptions) (*ListResult, error) {
 		res.Messages = append(res.Messages, s)
 	}
 	return res, nil
+}
+
+// attachmentRefs walks a BODYSTRUCTURE tree and collects attachment
+// metadata (named parts or parts with an attachment disposition).
+func attachmentRefs(bs imap.BodyStructure) []AttachmentRef {
+	if bs == nil {
+		return nil
+	}
+	var refs []AttachmentRef
+	bs.Walk(func(path []int, part imap.BodyStructure) bool {
+		sp, ok := part.(*imap.BodyStructureSinglePart)
+		if !ok {
+			return true
+		}
+		name := sp.Filename()
+		disp := sp.Disposition()
+		if name == "" && (disp == nil || !strings.EqualFold(disp.Value, "attachment")) {
+			return true
+		}
+		refs = append(refs, AttachmentRef{
+			Filename:    name,
+			ContentType: strings.ToLower(sp.MediaType()),
+			Size:        sp.Size,
+		})
+		return true
+	})
+	return refs
 }
 
 // FetchRaw downloads the full RFC 5322 source of one message by UID.
