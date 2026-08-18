@@ -34,7 +34,7 @@ jobs:
         run: |
           mkdir -p dist/postfach/third_party/onnxruntime/lib
           cp postfach-mcp install.sh README.md dist/postfach/
-          cp -R skills commands .claude-plugin dist/postfach/
+          cp -R skills commands .claude-plugin .codex-plugin dist/postfach/
           cp third_party/onnxruntime/lib/libonnxruntime*.dylib dist/postfach/third_party/onnxruntime/lib/
           tar -czf "postfach-darwin-arm64.tar.gz" -C dist postfach
 
