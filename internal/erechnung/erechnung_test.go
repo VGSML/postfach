@@ -1,6 +1,7 @@
 package erechnung
 
 import (
+	"bytes"
 	"image"
 	"image/png"
 	"os"
@@ -9,6 +10,30 @@ import (
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 )
+
+// TestExtractFromRealPDF runs against an arbitrary local invoice PDF when
+// POSTFACH_TEST_PDF is set — used to verify real-world files that cannot
+// be committed.
+func TestExtractFromRealPDF(t *testing.T) {
+	path := os.Getenv("POSTFACH_TEST_PDF")
+	if path == "" {
+		t.Skip("POSTFACH_TEST_PDF not set")
+	}
+	pdf, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, name, err := ExtractFromPDF(pdf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := ParseXML(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("source=%s invoice=%s seller=%q gross=%s %s profile=%s",
+		name, inv.InvoiceNumber, inv.Seller.Name, inv.TotalGross, inv.Currency, inv.Profile)
+}
 
 const ublSample = `<?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -215,5 +240,20 @@ func TestExtractFromPDF(t *testing.T) {
 	}
 	if inv.InvoiceNumber != "40023900" {
 		t.Errorf("roundtrip invoice number = %q", inv.InvoiceNumber)
+	}
+
+	// Corrupt the embedded file spec's ModDate the way real-world invoice
+	// PDFs do (measured on a dipasch Factur-X): structured extraction may
+	// fail, but the raw-stream fallback must still find the XML.
+	corrupted := bytes.ReplaceAll(pdf, []byte("/ModDate ("), []byte("/ModDate 0 ("))
+	if bytes.Equal(corrupted, pdf) {
+		t.Log("no ModDate in file spec; corruption test degenerate")
+	}
+	data, _, err = ExtractFromPDF(corrupted)
+	if err != nil {
+		t.Fatalf("extraction from corrupted PDF failed: %v", err)
+	}
+	if inv, err := ParseXML(data); err != nil || inv.InvoiceNumber != "40023900" {
+		t.Errorf("corrupted-PDF roundtrip: err=%v inv=%+v", err, inv)
 	}
 }

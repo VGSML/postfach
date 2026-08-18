@@ -7,12 +7,13 @@ package erechnung
 
 import (
 	"bytes"
+	"compress/zlib"
 	"encoding/xml"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	"io"
 )
 
 type Party struct {
@@ -303,12 +304,24 @@ var knownXMLNames = []string{"factur-x.xml", "zugferd-invoice.xml", "ZUGFeRD-inv
 
 // ExtractFromPDF pulls the embedded e-invoice XML out of a ZUGFeRD /
 // Factur-X PDF. Returns the XML bytes and the embedded file name.
+//
+// Real-world invoice PDFs ship with broken metadata that makes structured
+// extraction fail (measured: a dipasch Factur-X with an invalid ModDate in
+// the embedded file spec — pdfcpu knows only Strict/Relaxed validation and
+// Relaxed still rejects it). When that happens we fall back to scanning
+// raw PDF streams for a deflate-compressed e-invoice XML payload.
 func ExtractFromPDF(pdf []byte) ([]byte, string, error) {
 	atts, err := api.ExtractAttachmentsRaw(bytes.NewReader(pdf), "", nil, nil)
 	if err != nil {
+		if x, name, ok := scanStreamsForInvoiceXML(pdf); ok {
+			return x, name, nil
+		}
 		return nil, "", fmt.Errorf("read PDF attachments: %w", err)
 	}
 	if len(atts) == 0 {
+		if x, name, ok := scanStreamsForInvoiceXML(pdf); ok {
+			return x, name, nil
+		}
 		return nil, "", fmt.Errorf("PDF has no embedded files (not a ZUGFeRD/Factur-X invoice)")
 	}
 	// Prefer standardized names, else any single XML.
@@ -336,9 +349,63 @@ func ExtractFromPDF(pdf []byte) ([]byte, string, error) {
 		}
 		return data, a.FileName, nil
 	}
+	if x, name, ok := scanStreamsForInvoiceXML(pdf); ok {
+		return x, name, nil
+	}
 	names := make([]string, len(atts))
 	for i, a := range atts {
 		names[i] = a.FileName
 	}
 	return nil, "", fmt.Errorf("no e-invoice XML among embedded files: %s", strings.Join(names, ", "))
+}
+
+// scanStreamsForInvoiceXML walks every raw stream object in the PDF and
+// returns the first one that is (possibly deflate-compressed) e-invoice
+// XML. It ignores PDF structure entirely, so broken metadata cannot stop
+// it; false positives are ruled out by the root-element check.
+func scanStreamsForInvoiceXML(pdf []byte) ([]byte, string, bool) {
+	rest := pdf
+	for {
+		i := bytes.Index(rest, []byte("stream"))
+		if i < 0 {
+			return nil, "", false
+		}
+		// Skip the "stream" substring inside "endstream" keywords.
+		if i >= 3 && bytes.Equal(rest[i-3:i], []byte("end")) {
+			rest = rest[i+len("stream"):]
+			continue
+		}
+		seg := rest[i+len("stream"):]
+		seg = bytes.TrimPrefix(seg, []byte("\r\n"))
+		seg = bytes.TrimPrefix(seg, []byte("\n"))
+		end := bytes.Index(seg, []byte("endstream"))
+		if end < 0 {
+			return nil, "", false
+		}
+		if x, ok := tryInvoiceXML(bytes.TrimRight(seg[:end], "\r\n")); ok {
+			return x, "embedded XML (raw stream scan)", true
+		}
+		rest = seg[end:]
+	}
+}
+
+func tryInvoiceXML(data []byte) ([]byte, bool) {
+	candidates := [][]byte{data}
+	if zr, err := zlib.NewReader(bytes.NewReader(data)); err == nil {
+		if d, err := io.ReadAll(zr); err == nil {
+			candidates = append(candidates, d)
+		}
+		zr.Close()
+	}
+	for _, c := range candidates {
+		trimmed := bytes.TrimLeft(c, "\xef\xbb\xbf \r\n\t")
+		if !bytes.HasPrefix(trimmed, []byte("<?xml")) && !bytes.HasPrefix(trimmed, []byte("<")) {
+			continue
+		}
+		switch rootLocalName(trimmed) {
+		case "Invoice", "CreditNote", "CrossIndustryInvoice":
+			return trimmed, true
+		}
+	}
+	return nil, false
 }
