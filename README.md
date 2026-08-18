@@ -61,6 +61,22 @@ directly. Two ways in:
   (gitignored). Add this directory as a local marketplace in developer
   mode and install the `postfach` plugin.
 
+## Uninstall
+
+```sh
+./uninstall.sh                # removes the Claude Code and ChatGPT/Codex
+                              # registrations and the generated config
+                              # (.env, .codex-plugin/mcp.json)
+./uninstall.sh --artifacts    # also deletes models/, third_party/, the binary
+./uninstall.sh --purge-data   # ALSO deletes the documents/registry folder
+                              # (asks you to type the path; --yes skips prompts)
+```
+
+Documents and registries are never touched without `--purge-data`. If
+postfach was installed as a plugin, additionally `/plugin uninstall
+postfach@hugr-lab` (Claude Code) or remove the local marketplace in
+ChatGPT developer mode; `/postfach:remove` walks through all of it.
+
 Releases are cut by tagging `v*` (see `.github/workflows/release.yml`).
 A remote MCP service (streamable HTTP, auth, multi-tenant) is the end goal
 but a separate stage — the tool layer is transport-agnostic by design.
