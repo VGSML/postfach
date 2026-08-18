@@ -29,13 +29,18 @@ With the Prompt Guard 2 classifier (macOS arm64):
 
 ```sh
 make deps-guard    # downloads libtokenizers.a and onnxruntime into third_party/
-make fetch-model   # downloads model.quant.onnx (~280 MB) + tokenizer.json into models/pg2/
+make fetch-model   # downloads model.quant.onnx (~280 MB) + tokenizer.json into models/pg2-86m/
 make build-guard   # go build -tags promptguard
 POSTFACH_IMAP_URL='imaps://...' \
-POSTFACH_PG2_MODEL="$PWD/models/pg2/model.quant.onnx" \
+POSTFACH_PG2_MODEL="$PWD/models/pg2-86m/model.quant.onnx" \
 POSTFACH_ORT_LIB="$PWD/third_party/onnxruntime/lib/libonnxruntime.dylib" \
 ./postfach-mcp
 ```
+
+`make fetch-model PG2_VARIANT=22m` fetches the 22M variant (~70 MB, ~2×
+faster) instead — English-only: it does not detect German or Russian
+injections (measured DE score 0.003 vs 0.991 on 86M), so keep 86M for
+multilingual mailboxes.
 
 Add to Claude Code:
 

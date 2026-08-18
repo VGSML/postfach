@@ -23,7 +23,7 @@ Postfach is an MCP (Model Context Protocol) server that exposes tools for workin
 - **Score dilution:** the classifier scores a whole window, so a 16-token injection scores 0.99 alone but 0.04 inside ~100 benign tokens. Hence two-scale scanning in `promptguard.go`: coarse 510-token windows + fine 64-token windows (stride 32), max score wins. Don't "optimize" the fine scan away.
 - **CoreML EP is opt-in** (`POSTFACH_PG2_COREML=1`) and currently slower than CPU: the export has unbounded dims, CoreML rejects nodes and recompiles per shape. Fixed-shape re-export is the path to GPU/ANE.
 - **ORT version coupling:** the `onnxruntime` release downloaded by the Makefile must match the ORT API version `yalue/onnxruntime_go` expects (v1.33 → ORT 1.29). A mismatch fails at init with "requested API version".
-- **8 languages, no Russian** in PG2 — the heuristics carry RU; the `Screener` interface allows swapping in a multilingual model (e.g. Qwen3Guard) later.
+- **Language coverage decides the variant.** 86M (mDeBERTa, default) catches DE injections at 0.99 and — beyond its official 8 languages — RU at 0.96 (measured). The 22M variant (DeBERTa-xsmall, `make fetch-model PG2_VARIANT=22m`) is 4× smaller, ~2× faster and more dilution-resistant, but **blind to non-English injections** (DE scores 0.003) — never use it for the German invoice mailbox. Heuristics carry RU/DE regardless; the `Screener` interface allows swapping in another model (e.g. Qwen3Guard) later.
 - Tokenizer is loaded with truncation/padding stripped from `tokenizer.json` (`loadTokenizerNoTruncation`) so long texts tokenize fully — keep it that way, silent truncation defeats chunking.
 
 ### go.work gotcha (important)

@@ -2,8 +2,13 @@
 ORT_VERSION        := 1.29.0
 TOKENIZERS_VERSION := 1.27.0
 THIRD_PARTY        := third_party
-MODEL_DIR          := models/pg2
-HF_REPO            := https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-86M-onnx/resolve/main
+
+# Prompt Guard 2 variant: 86m (multilingual, default) or 22m (English-only,
+# 4x smaller and ~2x faster, but blind to non-English injections — measured
+# DE injection score 0.003 vs 0.991 on 86m). Usage: make fetch-model PG2_VARIANT=22m
+PG2_VARIANT        ?= 86m
+MODEL_DIR          := models/pg2-$(PG2_VARIANT)
+HF_REPO            := https://huggingface.co/gravitee-io/Llama-Prompt-Guard-2-$(shell echo $(PG2_VARIANT) | tr a-z A-Z)-onnx/resolve/main
 
 GUARD_ENV := CGO_LDFLAGS="-L$(CURDIR)/$(THIRD_PARTY)/lib"
 
