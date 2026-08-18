@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/server"
 
@@ -27,9 +28,28 @@ func main() {
 	}
 	log.Printf("imap %s as %s, attachments dir %s", cfg.Addr(), cfg.Username, cfg.AttachmentsDir)
 
-	// Screening chain: heuristics first, then the Prompt Guard 2 classifier
-	// when configured (POSTFACH_PG2_MODEL + build tag promptguard).
+	// Screening chain: heuristics, then the language allowlist gate, then
+	// the Prompt Guard 2 classifier when configured (POSTFACH_PG2_MODEL +
+	// build tag promptguard).
 	screener := screen.Chain{screen.NewHeuristic()}
+	// Languages the screening stack can actually vet. Text in any other
+	// language/script is flagged: an injection we cannot screen is an
+	// injection we must not trust. Default en,de,ru; POSTFACH_ALLOWED_LANGS
+	// overrides ("any" disables the gate).
+	langs := os.Getenv("POSTFACH_ALLOWED_LANGS")
+	if langs == "" {
+		langs = "en,de,ru"
+	}
+	if langs == "any" || langs == "*" {
+		log.Printf("language gate disabled (POSTFACH_ALLOWED_LANGS=%s)", langs)
+	} else {
+		gate, err := screen.NewLanguageGate(strings.Split(langs, ","))
+		if err != nil {
+			log.Fatalf("language gate: %v", err)
+		}
+		screener = append(screener, gate)
+		log.Printf("language allowlist: %s", langs)
+	}
 	pg, err := screen.NewPromptGuardFromEnv()
 	if err != nil {
 		log.Fatalf("promptguard: %v", err)
