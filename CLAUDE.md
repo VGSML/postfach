@@ -48,7 +48,10 @@ make test-guard               # integration tests against the real model
 
 - **Transport-agnostic tool layer.** The stdio server is a PoC; the service will later become a remote MCP (streamable HTTP). Keep tool handlers (mail access, attachment saving, injection screening) decoupled from the transport so only the `cmd/` entrypoint changes.
 - **stdio discipline.** With stdio transport, stdout is the JSON-RPC channel — all logging must go to stderr.
-- **Email content is untrusted input.** Every string originating from a mailbox (subjects, bodies, sender names, attachment filenames) passes through the screening layer before it is placed in a tool result. Screening is layered: cheap heuristics in Go first, then the Prompt Guard 2 classifier. This layer sits between the mail client and the tool response and is not optional per-tool.
+- **Email content is untrusted input.** Every string originating from a mailbox (subjects, bodies, sender names, attachment filenames) passes through the screening layer before it is placed in a tool result. Screening is layered: cheap heuristics, the language allowlist gate (`POSTFACH_ALLOWED_LANGS`, default en,de,ru — text the stack cannot vet is flagged, script check catches embedded foreign-script fragments), then the Prompt Guard 2 classifier. This layer sits between the mail client and the tool response and is not optional per-tool.
+- **Pagination never weakens screening.** `read_message`/`read_attachment` page long text by characters, but the FULL text is screened on every call before the page is cut. Keep that invariant.
+- **Reads are non-destructive.** Mailboxes are opened read-only (`SelectOptions{ReadOnly: true}` = EXAMINE) and body fetches use `Peek` — `\Seen` is never set. Incremental ingestion uses `since_uid` + `uid_validity` from `list_messages`, not read/unread flags.
+- **Attachment ledger.** `save_attachment` appends to `registry.jsonl` in the attachments dir (one JSON line per save, `sha256` is the dedup key) and skips writing content whose hash is already recorded.
 - **Attachment safety.** Attachments are written only under a configured output directory; sanitize filenames against path traversal.
 - **Configuration via env only.** Mailbox credentials/connection strings come from environment variables; never log them or echo them back through tool results.
 

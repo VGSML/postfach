@@ -12,6 +12,7 @@ PoC stage: local stdio transport. The end goal is a remote MCP service.
 | `POSTFACH_IMAP_URL` | yes | `imaps://user:password@imap.example.com:993` (`imap://` uses STARTTLS on 143). URL-escape special characters in the password. |
 | `POSTFACH_ATTACHMENTS_DIR` | no | Where `save_attachment` writes files. Default `./attachments`. |
 | `POSTFACH_MAX_INLINE_MB` | no | Size cap for `read_attachment`, default 5. |
+| `POSTFACH_ALLOWED_LANGS` | no | Language allowlist for the screening gate, default `en,de,ru`. Comma-separated ISO codes; `any` disables the gate. |
 | `POSTFACH_PG2_MODEL` | no | Path to Prompt Guard 2 `model.quant.onnx`; enables the classifier (needs a `make build-guard` binary). |
 | `POSTFACH_PG2_TOKENIZER` | no | Path to `tokenizer.json`, default: next to the model. |
 | `POSTFACH_PG2_THRESHOLD` | no | Malicious-score threshold, default 0.5. |
@@ -53,10 +54,13 @@ claude mcp add postfach \
 
 ## Tools
 
-- `list_messages(mailbox="INBOX", limit=20, unseen_only=false)` — newest messages first: uid, date, from, subject, flags, size.
-- `read_message(uid, mailbox="INBOX")` — headers, text body (text/plain, or text/html converted), attachment list.
-- `read_attachment(uid, attachment_index, mailbox="INBOX")` — returns the attachment inline with its MIME type: text/XML (incl. e-invoice XML) as screened text, images as image content, PDFs and other binaries as base64 blobs. Capped by `POSTFACH_MAX_INLINE_MB`.
-- `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR` and returns the path.
+All reads are strictly non-destructive: mailboxes are opened read-only and
+messages are never marked as seen.
+
+- `list_messages(mailbox="INBOX", limit=20, unseen_only=false, since_uid=0, since_date="")` — newest messages first: uid, dates (envelope + server internal), from, subject, flags, size, plus the mailbox `uid_validity`. `since_uid` + `uid_validity` form the incremental-sync cursor for ingestion loops; `since_date` filters by server receive time.
+- `read_message(uid, mailbox="INBOX", body_offset=0, body_limit=4000)` — headers, one page of the text body (character-based pagination with `body_total_chars` / `body_next_offset`), and the attachment list with per-attachment `sha256`. The full body is always screened regardless of the requested page.
+- `read_attachment(uid, attachment_index, mailbox="INBOX", offset=0, limit=4000)` — returns the attachment inline with its MIME type and `sha256`: text/XML (incl. e-invoice XML) as screened, paginated text; images as image content; PDFs and other binaries as base64 blobs. Capped by `POSTFACH_MAX_INLINE_MB`.
+- `save_attachment(uid, attachment_index, mailbox="INBOX")` — saves one attachment under `POSTFACH_ATTACHMENTS_DIR`, appends a record (uid, filename, path, `sha256`, sender, screening verdict) to `registry.jsonl` there, and deduplicates by hash: identical content is not written twice.
 
 Planned for the invoice-mailbox use case: `get_attached_erechnung` — parse
 e-Rechnung XML (XRechnung UBL/CII, ZUGFeRD/Factur-X embedded in PDF/A-3) on
@@ -71,6 +75,12 @@ tool result:
 - zero-width/bidi control characters are always stripped;
 - heuristic rules (EN/RU/DE injection phrasings, system-prompt markers,
   exfiltration patterns) flag suspicious content;
+- a **language allowlist gate** (`POSTFACH_ALLOWED_LANGS`) flags text the
+  screening stack cannot vet: letters from foreign scripts (e.g. a Chinese
+  fragment inside a German email — a few stray glyphs are tolerated) and,
+  for longer texts, statistically detected disallowed languages. An
+  injection in a language the classifier was not trained on must not be
+  trusted just because the classifier is silent;
 - flagged text is **redacted by default**; pass `include_flagged_content=true`
   to read it anyway — the result then carries a `screening` verdict so the
   client can treat it accordingly;

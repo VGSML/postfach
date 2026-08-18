@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -36,20 +37,26 @@ func New(cfg *config.Config, s screen.Screener) *Tools {
 // Register adds all postfach tools to the MCP server.
 func (t *Tools) Register(s *server.MCPServer) {
 	s.AddTool(mcp.NewTool("list_messages",
-		mcp.WithDescription("List the newest messages in a mailbox (newest first). "+
-			"All returned text originates from untrusted email and is screened for prompt injection."),
+		mcp.WithDescription("List the newest messages in a mailbox (newest first). Strictly read-only: never marks "+
+			"messages as seen. Returns uid_validity — UIDs are an incremental cursor only within one uid_validity "+
+			"generation. All returned text originates from untrusted email and is screened for prompt injection."),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
 		mcp.WithNumber("limit", mcp.Description("Maximum number of messages to return (default 20, max 100)")),
 		mcp.WithBoolean("unseen_only", mcp.Description("Only list unread messages")),
+		mcp.WithNumber("since_uid", mcp.Description("Only messages with UID greater than this (incremental cursor)")),
+		mcp.WithString("since_date", mcp.Description("Only messages received after this time (RFC3339, '2006-01-02 15:04:05' or '2006-01-02')")),
 		mcp.WithBoolean("include_flagged_content", mcp.Description("Return text even if it was flagged as potential prompt injection")),
 	), t.handleList)
 
 	s.AddTool(mcp.NewTool("read_message",
-		mcp.WithDescription("Read one message by UID: headers, text body and the list of attachments. "+
-			"The body is untrusted email content; if it is flagged as potential prompt injection it is redacted "+
-			"unless include_flagged_content=true."),
+		mcp.WithDescription("Read one message by UID: headers, a page of the text body, and the attachment list with "+
+			"per-attachment sha256. Read-only, never marks the message as seen. The FULL body is always screened for "+
+			"prompt injection regardless of the requested page; flagged content is redacted unless "+
+			"include_flagged_content=true. Page through long bodies with body_offset/body_limit."),
 		mcp.WithNumber("uid", mcp.Required(), mcp.Description("Message UID as returned by list_messages")),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
+		mcp.WithNumber("body_offset", mcp.Description("Character offset into the body (default 0)")),
+		mcp.WithNumber("body_limit", mcp.Description("Characters per page (default 4000, max 40000)")),
 		mcp.WithBoolean("include_flagged_content", mcp.Description("Return the body even if it was flagged")),
 	), t.handleRead)
 
@@ -61,13 +68,16 @@ func (t *Tools) Register(s *server.MCPServer) {
 		mcp.WithNumber("uid", mcp.Required(), mcp.Description("Message UID as returned by list_messages")),
 		mcp.WithNumber("attachment_index", mcp.Required(), mcp.Description("Attachment index as returned by read_message")),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
+		mcp.WithNumber("offset", mcp.Description("Character offset for text attachments (default 0)")),
+		mcp.WithNumber("limit", mcp.Description("Characters per page for text attachments (default 4000, max 40000)")),
 		mcp.WithBoolean("include_flagged_content", mcp.Description("Return text content even if it was flagged as potential prompt injection")),
 	), t.handleReadAttachment)
 
 	s.AddTool(mcp.NewTool("save_attachment",
-		mcp.WithDescription("Save one attachment of a message to the configured attachments directory "+
-			"and return the saved path. Filenames are sanitized; the file content is written as-is and is never "+
-			"interpreted — do not open saved files without scanning them."),
+		mcp.WithDescription("Save one attachment to the configured attachments directory and record it (with its "+
+			"sha256) in the registry.jsonl ledger there. Deduplicates by sha256: an already-saved attachment returns "+
+			"the existing record instead of writing a copy. Filenames are sanitized; the file content is written "+
+			"as-is and is never interpreted — do not open saved files without scanning them."),
 		mcp.WithNumber("uid", mcp.Required(), mcp.Description("Message UID as returned by list_messages")),
 		mcp.WithNumber("attachment_index", mcp.Required(), mcp.Description("Attachment index as returned by read_message")),
 		mcp.WithString("mailbox", mcp.Description("IMAP mailbox name (default INBOX)")),
@@ -132,19 +142,32 @@ func (t *Tools) handleList(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	limit := min(max(argInt(args, "limit", 20), 1), 100)
 	includeFlagged := argBool(args, "include_flagged_content")
 
+	opts := mail.ListOptions{
+		Limit:      limit,
+		UnseenOnly: argBool(args, "unseen_only"),
+		SinceUID:   uint32(argInt(args, "since_uid", 0)),
+	}
+	if s := argString(args, "since_date", ""); s != "" {
+		since, err := parseSinceDate(s)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		opts.Since = since
+	}
+
 	cl, err := mail.Dial(t.cfg)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 	defer cl.Close()
 
-	summaries, err := cl.List(mailbox, limit, argBool(args, "unseen_only"))
+	res, err := cl.List(mailbox, opts)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
-	items := make([]listItem, 0, len(summaries))
-	for _, s := range summaries {
+	items := make([]listItem, 0, len(res.Messages))
+	for _, s := range res.Messages {
 		item := listItem{Summary: s}
 		var verdict screen.Verdict
 		s.Subject, verdict, err = t.guardMerge(ctx, s.Subject, includeFlagged, verdict)
@@ -163,10 +186,21 @@ func (t *Tools) handleList(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 		items = append(items, item)
 	}
 	return jsonResult(map[string]any{
-		"mailbox":  mailbox,
-		"count":    len(items),
-		"messages": items,
+		"mailbox":      mailbox,
+		"uid_validity": res.UIDValidity,
+		"count":        len(items),
+		"messages":     items,
 	})
+}
+
+// parseSinceDate accepts RFC3339, a space-separated variant, or a bare date.
+func parseSinceDate(s string) (time.Time, error) {
+	for _, layout := range []string{time.RFC3339, "2006-01-02 15:04:05", "2006-01-02"} {
+		if ts, err := time.Parse(layout, s); err == nil {
+			return ts, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("since_date: cannot parse %q (want RFC3339, '2006-01-02 15:04:05' or '2006-01-02')", s)
 }
 
 // guardMerge screens text and merges the verdict into acc.
@@ -209,10 +243,15 @@ func (t *Tools) handleRead(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	// The FULL body is screened no matter which page is requested — the
+	// pagination below only limits what enters the context window.
 	body, verdict, err := t.guardMerge(ctx, parsed.TextBody, includeFlagged, verdict)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
+	page, totalChars, nextOffset, hasMore := pageText(body,
+		argInt(args, "body_offset", 0), argInt(args, "body_limit", defaultPageChars))
+
 	atts := make([]mail.Attachment, len(parsed.Attachments))
 	for i, a := range parsed.Attachments {
 		a.Filename, verdict, err = t.guardMerge(ctx, a.Filename, includeFlagged, verdict)
@@ -223,13 +262,19 @@ func (t *Tools) handleRead(ctx context.Context, req mcp.CallToolRequest) (*mcp.C
 	}
 
 	result := map[string]any{
-		"uid":         uid,
-		"mailbox":     mailbox,
-		"subject":     subject,
-		"from":        from,
-		"to":          screen.StripInvisible(parsed.To),
-		"body":        body,
-		"attachments": atts,
+		"uid":              uid,
+		"mailbox":          mailbox,
+		"subject":          subject,
+		"from":             from,
+		"to":               screen.StripInvisible(parsed.To),
+		"body":             page,
+		"body_total_chars": totalChars,
+		"body_offset":      argInt(args, "body_offset", 0),
+		"attachments":      atts,
+	}
+	if hasMore {
+		result["body_has_more"] = true
+		result["body_next_offset"] = nextOffset
 	}
 	if !parsed.Date.IsZero() {
 		result["date"] = parsed.Date.Format("2006-01-02T15:04:05Z07:00")
@@ -306,8 +351,11 @@ func (t *Tools) handleReadAttachment(ctx context.Context, req mcp.CallToolReques
 		"size_bytes":       len(data),
 	}
 
+	meta["sha256"] = att.SHA256
+
 	switch {
 	case isTextMIME(mimeType):
+		// Full content is screened; pagination only limits context usage.
 		body, bodyVerdict, err := t.guard(ctx, string(data), includeFlagged)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
@@ -316,10 +364,18 @@ func (t *Tools) handleReadAttachment(ctx context.Context, req mcp.CallToolReques
 		if verdict.Flagged {
 			meta["screening"] = verdict
 		}
+		page, totalChars, nextOffset, hasMore := pageText(body,
+			argInt(args, "offset", 0), argInt(args, "limit", defaultPageChars))
+		meta["total_chars"] = totalChars
+		meta["offset"] = argInt(args, "offset", 0)
+		if hasMore {
+			meta["has_more"] = true
+			meta["next_offset"] = nextOffset
+		}
 		metaJSON, _ := json.MarshalIndent(meta, "", "  ")
 		return &mcp.CallToolResult{Content: []mcp.Content{
 			mcp.TextContent{Type: "text", Text: string(metaJSON)},
-			mcp.TextContent{Type: "text", Text: body},
+			mcp.TextContent{Type: "text", Text: page},
 		}}, nil
 
 	case strings.HasPrefix(mimeType, "image/"):
@@ -378,6 +434,23 @@ func (t *Tools) handleSaveAttachment(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
+	// Dedup by content hash: an attachment already in the ledger (and still
+	// on disk) is not written again.
+	if prior, err := findInRegistry(t.cfg.AttachmentsDir, att.SHA256); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("read registry: %v", err)), nil
+	} else if prior != nil {
+		if _, statErr := os.Stat(prior.SavedPath); statErr == nil {
+			return jsonResult(map[string]any{
+				"already_saved": true,
+				"saved_path":    prior.SavedPath,
+				"sha256":        prior.SHA256,
+				"size_bytes":    prior.SizeBytes,
+				"first_saved":   prior.SavedAt,
+				"note":          "identical content (same sha256) was saved before; no new file written",
+			})
+		}
+	}
+
 	// The filename is untrusted: sanitize it, and if it still looks like an
 	// injection attempt, fall back to a generated name.
 	fallback := fmt.Sprintf("attachment-uid%d-%d.bin", uid, index)
@@ -402,11 +475,35 @@ func (t *Tools) handleSaveAttachment(ctx context.Context, req mcp.CallToolReques
 		return mcp.NewToolResultError(fmt.Sprintf("write attachment: %v", err)), nil
 	}
 
+	rec := registryRecord{
+		Mailbox:          mailbox,
+		UID:              uint32(uid),
+		AttachmentIndex:  index,
+		OriginalFilename: screen.StripInvisible(att.Filename),
+		SavedPath:        path,
+		SizeBytes:        int64(len(data)),
+		SHA256:           att.SHA256,
+		ContentType:      att.ContentType,
+		ScreeningFlagged: verdict.Flagged,
+	}
+	if parsed, err := mail.Parse(raw); err == nil {
+		rec.Subject = screen.StripInvisible(parsed.Subject)
+		rec.From = screen.StripInvisible(parsed.From)
+		if !parsed.Date.IsZero() {
+			rec.MessageDate = parsed.Date.Format(time.RFC3339)
+		}
+	}
+	if err := appendToRegistry(t.cfg.AttachmentsDir, rec); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("attachment saved to %s, but registry update failed: %v", path, err)), nil
+	}
+
 	result := map[string]any{
 		"saved_path":        path,
+		"sha256":            att.SHA256,
 		"size_bytes":        len(data),
 		"content_type":      att.ContentType,
 		"original_filename": screen.StripInvisible(att.Filename),
+		"registry":          filepath.Join(t.cfg.AttachmentsDir, registryFile),
 	}
 	if verdict.Flagged {
 		result["screening"] = verdict

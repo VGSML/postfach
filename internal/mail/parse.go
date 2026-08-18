@@ -2,6 +2,8 @@ package mail
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"html"
 	"io"
@@ -13,12 +15,15 @@ import (
 	"github.com/emersion/go-message/mail"
 )
 
-// Attachment describes one attachment without its content.
+// Attachment describes one attachment without its content. SHA256 is
+// computed on the fly while the message is parsed, so read_message can
+// report it before anything is saved.
 type Attachment struct {
 	Index       int    `json:"index"`
 	Filename    string `json:"filename"`
 	ContentType string `json:"content_type"`
 	Size        int64  `json:"size_bytes"`
+	SHA256      string `json:"sha256,omitempty"`
 }
 
 // Parsed is the decoded view of a message.
@@ -74,12 +79,14 @@ func Parse(raw []byte) (*Parsed, error) {
 		case *mail.AttachmentHeader:
 			name, _ := h.Filename()
 			ctype, _, _ := h.ContentType()
-			size, _ := io.Copy(io.Discard, part.Body)
+			hasher := sha256.New()
+			size, _ := io.Copy(hasher, part.Body)
 			p.Attachments = append(p.Attachments, Attachment{
 				Index:       attIdx,
 				Filename:    name,
 				ContentType: ctype,
 				Size:        size,
+				SHA256:      hex.EncodeToString(hasher.Sum(nil)),
 			})
 			attIdx++
 		}
@@ -120,7 +127,14 @@ func ExtractAttachment(raw []byte, index int) (Attachment, []byte, error) {
 		if err != nil {
 			return Attachment{}, nil, fmt.Errorf("read attachment %d: %w", index, err)
 		}
-		return Attachment{Index: index, Filename: name, ContentType: ctype, Size: int64(len(data))}, data, nil
+		sum := sha256.Sum256(data)
+		return Attachment{
+			Index:       index,
+			Filename:    name,
+			ContentType: ctype,
+			Size:        int64(len(data)),
+			SHA256:      hex.EncodeToString(sum[:]),
+		}, data, nil
 	}
 	return Attachment{}, nil, fmt.Errorf("attachment with index %d not found", index)
 }
