@@ -45,14 +45,28 @@ faster) instead — English-only: it does not detect German or Russian
 injections (measured DE score 0.003 vs 0.991 on 86M), so keep 86M for
 multilingual mailboxes.
 
-Add to Claude Code:
+Add to Claude Code with the full screening stack (run from the repo root;
+requires `make deps-guard fetch-model build-guard` once, and LM Studio
+serving the guard model if you set `POSTFACH_GUARD_LLM_MODEL`):
 
 ```sh
 claude mcp add postfach \
-  -e POSTFACH_IMAP_URL='imaps://user:pass@imap.example.com:993' \
+  -e POSTFACH_IMAP_URL='imaps://user:PASSWORD@imap.example.com:993' \
   -e POSTFACH_ATTACHMENTS_DIR="$HOME/Downloads/postfach" \
-  -- /path/to/postfach-mcp
+  -e POSTFACH_PG2_MODEL="$PWD/models/pg2-86m/model.quant.onnx" \
+  -e POSTFACH_ORT_LIB="$PWD/third_party/onnxruntime/lib/libonnxruntime.dylib" \
+  -e POSTFACH_GUARD_LLM_MODEL=qwen3guard-gen-0.6b \
+  -e POSTFACH_ALLOWED_LANGS=en,de,fr,it,es,pt,nl,pl,cs,sk,da,sv,no,fi,hu,ro,bg,el,hr,sl,lt,lv,et,ru \
+  -- "$PWD/postfach-mcp"
 ```
+
+URL-escape special characters in the password (`python3 -c 'import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=""))' 'p@ss'`).
+The server fails fast at startup if a configured screener is unavailable
+(missing model file, LM Studio not running) — by design: a wide language
+allowlist must never run without the screener that justifies it.
+
+The scheme `imap+insecure://` (plaintext, no STARTTLS) exists for tests and
+local development only.
 
 ## Tools
 

@@ -56,9 +56,12 @@ func Dial(cfg *config.Config) (*Client, error) {
 		c   *imapclient.Client
 		err error
 	)
-	if cfg.UseTLS {
+	switch {
+	case cfg.Insecure:
+		c, err = imapclient.DialInsecure(cfg.Addr(), nil)
+	case cfg.UseTLS:
 		c, err = imapclient.DialTLS(cfg.Addr(), nil)
-	} else {
+	default:
 		c, err = imapclient.DialStartTLS(cfg.Addr(), nil)
 	}
 	if err != nil {

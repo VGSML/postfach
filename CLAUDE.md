@@ -45,11 +45,19 @@ This repo sits inside `~/projects/hugr-lab/`, which has a `go.work` that does **
 ```sh
 go build ./... && go vet ./... && go test ./...   # default build, no native deps
 go test -run TestName ./internal/screen/          # single test
+go test -run TestE2E ./internal/tools/            # end-to-end against in-memory IMAP server
 
 make deps-guard fetch-model   # one-time: native libs + model (~280 MB)
 make build-guard              # binary with -tags promptguard (needs CGO_LDFLAGS, see Makefile)
-make test-guard               # integration tests against the real model
+make test-guard               # integration tests against the real PG2 model
+POSTFACH_GUARD_LLM_MODEL=qwen3guard-gen-0.6b go test ./internal/screen/  # live guard-LLM tests (needs LM Studio)
 ```
+
+The e2e suite (`internal/tools/e2e_test.go`) runs every tool against
+`imapmemserver` with seeded messages (attachments, an injection, a
+Chinese-language body) — extend it when adding tools; it is what stands
+between "compiles" and "works against a real mailbox". The
+`imap+insecure://` scheme exists for it and local dev only.
 
 ## Architecture Constraints
 

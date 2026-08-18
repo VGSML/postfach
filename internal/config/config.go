@@ -15,6 +15,7 @@ type Config struct {
 	Host     string
 	Port     string
 	UseTLS   bool // true for imaps://, false for imap:// (STARTTLS)
+	Insecure bool // imap+insecure://: plaintext, no STARTTLS — tests/local only
 	Username string
 	Password string
 
@@ -50,8 +51,11 @@ func Load() (*Config, error) {
 	case "imap":
 		cfg.UseTLS = false
 		cfg.Port = "143"
+	case "imap+insecure": // plaintext without STARTTLS — tests/local only
+		cfg.Insecure = true
+		cfg.Port = "143"
 	default:
-		return nil, fmt.Errorf("POSTFACH_IMAP_URL: unsupported scheme %q (want imap:// or imaps://)", u.Scheme)
+		return nil, fmt.Errorf("POSTFACH_IMAP_URL: unsupported scheme %q (want imaps://, imap:// or imap+insecure://)", u.Scheme)
 	}
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("POSTFACH_IMAP_URL: missing host")
