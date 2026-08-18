@@ -79,8 +79,9 @@ func main() {
 	// covers everything that changes verdicts.
 	fingerprint := strings.Join([]string{
 		"v1", langs,
-		os.Getenv("POSTFACH_PG2_MODEL"), os.Getenv("POSTFACH_PG2_THRESHOLD"),
-		os.Getenv("POSTFACH_GUARD_LLM_MODEL"),
+		os.Getenv("POSTFACH_PG2_MODEL"), os.Getenv("POSTFACH_PG2_TOKENIZER"),
+		os.Getenv("POSTFACH_PG2_THRESHOLD"), os.Getenv("POSTFACH_PG2_COREML"),
+		os.Getenv("POSTFACH_GUARD_LLM_MODEL"), os.Getenv("POSTFACH_GUARD_LLM_URL"),
 	}, "|")
 	cached, err := screen.NewCache(screener, fingerprint,
 		filepath.Join(cfg.AttachmentsDir, "screening_cache.jsonl"))

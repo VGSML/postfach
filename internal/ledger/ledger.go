@@ -20,12 +20,21 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xuri/excelize/v2"
 )
 
 const XLSXName = "Register.xlsx"
+
+// maxEntryLine caps one journal line: Load's scanner buffer must always be
+// able to read back what Upsert wrote, or one oversized entry would brick
+// the registry forever.
+const (
+	maxEntryLine  = 1 << 20
+	scanBufferCap = 16 << 20
+)
 
 var registryNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,39}$`)
 
@@ -72,9 +81,12 @@ type registryMeta struct {
 // Ledger is bound to one directory. docLink (optional) renders a web URL
 // for a saved document's file name; it becomes a hyperlink in the
 // workbook so registry rows can open their document from any machine.
+// The mutex serializes all registry operations: MCP servers dispatch tool
+// calls on a worker pool, so concurrent record_entry calls are normal.
 type Ledger struct {
 	dir     string
 	docLink func(filename string) string
+	mu      sync.Mutex
 }
 
 func New(dir string, docLink func(string) string) *Ledger {
@@ -113,6 +125,8 @@ func (l *Ledger) Create(registry, description string, fields []FieldDef) (bool, 
 	if err := ValidateName(registry); err != nil {
 		return false, err
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	existed := l.Exists(registry)
 	m, err := l.loadMeta(registry)
 	if err != nil {
@@ -144,7 +158,7 @@ func (l *Ledger) Create(registry, description string, fields []FieldDef) (bool, 
 	if err := l.saveMeta(registry, m); err != nil {
 		return false, err
 	}
-	if err := l.WriteXLSX(); err != nil {
+	if err := l.writeXLSX(); err != nil {
 		return !existed, fmt.Errorf("registry saved, but workbook update failed: %w", err)
 	}
 	return !existed, nil
@@ -156,6 +170,8 @@ func (l *Ledger) Drop(registry string) error {
 	if err := ValidateName(registry); err != nil {
 		return err
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if !l.Exists(registry) {
 		return fmt.Errorf("registry %q does not exist", registry)
 	}
@@ -165,29 +181,24 @@ func (l *Ledger) Drop(registry string) error {
 	if err := os.Remove(l.jsonlPath(registry)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	return l.WriteXLSX()
+	return l.writeXLSX()
 }
 
 // Registries lists all registries with their documentation and counts.
 func (l *Ledger) Registries() ([]Info, error) {
-	matches, err := filepath.Glob(filepath.Join(l.dir, "registry-*.meta.json"))
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	names, err := l.registryNames()
 	if err != nil {
 		return nil, err
 	}
-	names := make([]string, 0, len(matches))
-	for _, m := range matches {
-		base := strings.TrimSuffix(filepath.Base(m), ".meta.json")
-		names = append(names, strings.TrimPrefix(base, "registry-"))
-	}
-	sort.Strings(names)
-
 	infos := make([]Info, 0, len(names))
 	for _, name := range names {
 		m, err := l.loadMeta(name)
 		if err != nil {
 			return nil, err
 		}
-		entries, err := l.Load(name)
+		entries, err := l.load(name)
 		if err != nil {
 			return nil, err
 		}
@@ -200,9 +211,30 @@ func (l *Ledger) Registries() ([]Info, error) {
 	return infos, nil
 }
 
+// registryNames enumerates registries from their meta files.
+func (l *Ledger) registryNames() ([]string, error) {
+	matches, err := filepath.Glob(filepath.Join(l.dir, "registry-*.meta.json"))
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
+		base := strings.TrimSuffix(filepath.Base(m), ".meta.json")
+		names = append(names, strings.TrimPrefix(base, "registry-"))
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
 // Load reads live entries of one registry (last write wins per key,
 // tombstones drop the key, stable order of first appearance).
 func (l *Ledger) Load(registry string) ([]Entry, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.load(registry)
+}
+
+func (l *Ledger) load(registry string) ([]Entry, error) {
 	f, err := os.Open(l.jsonlPath(registry))
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -215,7 +247,7 @@ func (l *Ledger) Load(registry string) ([]Entry, error) {
 	var order []string
 	byKey := map[string]Entry{}
 	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+	sc.Buffer(make([]byte, 0, 64*1024), scanBufferCap)
 	for sc.Scan() {
 		var e Entry
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil || e.Key == "" {
@@ -269,6 +301,9 @@ func (l *Ledger) appendLine(registry string, e Entry) error {
 	if err != nil {
 		return err
 	}
+	if len(line) > maxEntryLine {
+		return fmt.Errorf("entry too large (%d bytes, max %d): keep large content in files, not registry fields", len(line), maxEntryLine)
+	}
 	f, err := os.OpenFile(l.jsonlPath(registry), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -285,23 +320,25 @@ func (l *Ledger) appendLine(registry string, e Entry) error {
 // erase previously recorded values. Field names not documented at
 // add_registry time are still stored (and become new columns); they are
 // returned so the caller notices schema drift.
-func (l *Ledger) Upsert(registry string, e Entry) (stored Entry, updated bool, undeclared []string, err error) {
+func (l *Ledger) Upsert(registry string, e Entry) (stored Entry, updated bool, undeclared []string, total int, err error) {
 	if err := ValidateName(registry); err != nil {
-		return Entry{}, false, nil, err
+		return Entry{}, false, nil, 0, err
 	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	if !l.Exists(registry) {
-		return Entry{}, false, nil, fmt.Errorf("registry %q does not exist; create it first with add_registry", registry)
+		return Entry{}, false, nil, 0, fmt.Errorf("registry %q does not exist; create it first with add_registry", registry)
 	}
 	if strings.TrimSpace(e.Key) == "" {
-		return Entry{}, false, nil, fmt.Errorf("key is required")
+		return Entry{}, false, nil, 0, fmt.Errorf("key is required")
 	}
 	if len(e.Fields) == 0 {
-		return Entry{}, false, nil, fmt.Errorf("fields must not be empty")
+		return Entry{}, false, nil, 0, fmt.Errorf("fields must not be empty")
 	}
 
-	entries, err := l.Load(registry)
+	entries, err := l.load(registry)
 	if err != nil {
-		return Entry{}, false, nil, err
+		return Entry{}, false, nil, 0, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	for _, old := range entries {
@@ -326,10 +363,15 @@ func (l *Ledger) Upsert(registry string, e Entry) (stored Entry, updated bool, u
 		e.Fields = clean
 	}
 
+	total = len(entries)
+	if !updated {
+		total++
+	}
+
 	// Track schema drift: append undeclared field names as new columns.
 	m, err := l.loadMeta(registry)
 	if err != nil {
-		return Entry{}, false, nil, err
+		return Entry{}, false, nil, 0, err
 	}
 	known := map[string]bool{}
 	for _, c := range m.Columns {
@@ -344,17 +386,17 @@ func (l *Ledger) Upsert(registry string, e Entry) (stored Entry, updated bool, u
 	if len(undeclared) > 0 {
 		m.Columns = append(m.Columns, undeclared...)
 		if err := l.saveMeta(registry, m); err != nil {
-			return Entry{}, false, nil, err
+			return Entry{}, false, nil, 0, err
 		}
 	}
 
 	if err := l.appendLine(registry, e); err != nil {
-		return Entry{}, false, nil, err
+		return Entry{}, false, nil, 0, err
 	}
-	if err := l.WriteXLSX(); err != nil {
-		return e, updated, undeclared, fmt.Errorf("entry recorded, but workbook update failed: %w", err)
+	if err := l.writeXLSX(); err != nil {
+		return e, updated, undeclared, total, fmt.Errorf("entry recorded, but workbook update failed: %w", err)
 	}
-	return e, updated, undeclared, nil
+	return e, updated, undeclared, total, nil
 }
 
 // Remove tombstones one entry. Returns whether it existed.
@@ -362,7 +404,9 @@ func (l *Ledger) Remove(registry, key string) (bool, error) {
 	if err := ValidateName(registry); err != nil {
 		return false, err
 	}
-	entries, err := l.Load(registry)
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	entries, err := l.load(registry)
 	if err != nil {
 		return false, err
 	}
@@ -379,7 +423,7 @@ func (l *Ledger) Remove(registry, key string) (bool, error) {
 	if err := l.appendLine(registry, Entry{Key: key, Deleted: true, UpdatedAt: time.Now().UTC().Format(time.RFC3339)}); err != nil {
 		return false, err
 	}
-	return true, l.WriteXLSX()
+	return true, l.writeXLSX()
 }
 
 func emptyValue(v any) bool {
@@ -417,15 +461,29 @@ func mergeEntry(dst *Entry, src Entry) {
 	}
 }
 
+// SortNewestFirst orders entries by RecordedAt descending — the one
+// definition of "newest first" shared by the workbook and list_entries.
+func SortNewestFirst(entries []Entry) {
+	sort.SliceStable(entries, func(a, b int) bool {
+		return entries[a].RecordedAt > entries[b].RecordedAt
+	})
+}
+
 // WriteXLSX regenerates the workbook: one sheet per registry, dynamic
 // columns in persisted order, newest entries first. With no registries
 // the workbook is removed.
 func (l *Ledger) WriteXLSX() error {
-	infos, err := l.Registries()
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.writeXLSX()
+}
+
+func (l *Ledger) writeXLSX() error {
+	names, err := l.registryNames()
 	if err != nil {
 		return err
 	}
-	if len(infos) == 0 {
+	if len(names) == 0 {
 		if err := os.Remove(l.XLSXPath()); err != nil && !os.IsNotExist(err) {
 			return err
 		}
@@ -436,8 +494,7 @@ func (l *Ledger) WriteXLSX() error {
 	defer f.Close()
 	bold, _ := f.NewStyle(&excelize.Style{Font: &excelize.Font{Bold: true}})
 
-	for i, info := range infos {
-		reg := info.Registry
+	for i, reg := range names {
 		sheet := sheetName(reg)
 		if i == 0 {
 			if err := f.SetSheetName("Sheet1", sheet); err != nil {
@@ -447,13 +504,11 @@ func (l *Ledger) WriteXLSX() error {
 			return err
 		}
 
-		entries, err := l.Load(reg)
+		entries, err := l.load(reg)
 		if err != nil {
 			return err
 		}
-		sort.SliceStable(entries, func(a, b int) bool {
-			return entries[a].RecordedAt > entries[b].RecordedAt
-		})
+		SortNewestFirst(entries)
 		m, err := l.loadMeta(reg)
 		if err != nil {
 			return err

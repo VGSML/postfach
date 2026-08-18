@@ -458,6 +458,15 @@ func TestE2E(t *testing.T) {
 		if m["count"].(float64) != 0 {
 			t.Errorf("after remove: %v", m)
 		}
+
+		m, _ = call(t, tl.handleDropRegistry, map[string]any{"registry": "rechnungen"})
+		if m["dropped"] != true {
+			t.Errorf("drop: %v", m)
+		}
+		m, _ = call(t, tl.handleRegistries, map[string]any{})
+		if regs := m["registries"]; regs != nil && len(regs.([]any)) != 0 {
+			t.Errorf("registries after drop: %v", regs)
+		}
 	})
 
 	t.Run("cursor_roundtrip", func(t *testing.T) {

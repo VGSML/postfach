@@ -60,8 +60,11 @@ type part struct {
 
 // collectParts walks the message and returns all attachments depth-first,
 // recursing into nested message/rfc822 attachments. The traversal order is
-// deterministic and defines the attachment index space used by all tools.
-func collectParts(raw []byte, via string, depth int) ([]part, error) {
+// deterministic and defines the attachment index space used by all tools —
+// a part that fails to decode is kept (with whatever bytes decoded) so
+// indices recorded elsewhere never shift. With withData=false, non-nested
+// attachment bodies are streamed through the hasher instead of buffered.
+func collectParts(raw []byte, via string, depth int, withData bool) ([]part, error) {
 	mr, err := mail.CreateReader(bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("parse message: %w", err)
@@ -81,22 +84,36 @@ func collectParts(raw []byte, via string, depth int) ([]part, error) {
 		}
 		name, _ := h.Filename()
 		ctype, _, _ := h.ContentType()
-		data, err := io.ReadAll(p.Body)
-		if err != nil {
-			continue
+		nested := IsNestedMessage(ctype, name)
+
+		var (
+			data []byte
+			size int64
+			sum  string
+		)
+		if withData || nested {
+			// Keep partial bytes on decode errors: index stability beats
+			// completeness here.
+			data, _ = io.ReadAll(p.Body)
+			size = int64(len(data))
+			s := sha256.Sum256(data)
+			sum = hex.EncodeToString(s[:])
+		} else {
+			hasher := sha256.New()
+			size, _ = io.Copy(hasher, p.Body)
+			sum = hex.EncodeToString(hasher.Sum(nil))
 		}
-		sum := sha256.Sum256(data)
 		out = append(out, part{
 			meta: Attachment{
 				Filename:    name,
 				ContentType: ctype,
-				Size:        int64(len(data)),
-				SHA256:      hex.EncodeToString(sum[:]),
+				Size:        size,
+				SHA256:      sum,
 				Via:         via,
 			},
 			data: data,
 		})
-		if IsNestedMessage(ctype, name) && depth < maxNestingDepth {
+		if nested && depth < maxNestingDepth {
 			nestedVia := name
 			if nestedVia == "" {
 				nestedVia = "nested message"
@@ -104,9 +121,9 @@ func collectParts(raw []byte, via string, depth int) ([]part, error) {
 			if via != "" {
 				nestedVia = via + " > " + nestedVia
 			}
-			nested, err := collectParts(data, nestedVia, depth+1)
+			sub, err := collectParts(data, nestedVia, depth+1, withData)
 			if err == nil {
-				out = append(out, nested...)
+				out = append(out, sub...)
 			}
 		}
 	}
@@ -156,7 +173,7 @@ func Parse(raw []byte) (*Parsed, error) {
 		p.TextBody = htmlToText(htmlBody)
 	}
 
-	parts, err := collectParts(raw, "", 0)
+	parts, err := collectParts(raw, "", 0, false)
 	if err != nil {
 		return nil, err
 	}
@@ -171,16 +188,33 @@ func Parse(raw []byte) (*Parsed, error) {
 // ExtractAttachment returns the content of the attachment with the given
 // index in the flattened index space reported by Parse.
 func ExtractAttachment(raw []byte, index int) (Attachment, []byte, error) {
-	parts, err := collectParts(raw, "", 0)
+	metas, datas, err := ExtractAll(raw)
 	if err != nil {
 		return Attachment{}, nil, err
 	}
-	if index < 0 || index >= len(parts) {
-		return Attachment{}, nil, fmt.Errorf("attachment with index %d not found (message has %d)", index, len(parts))
+	if index < 0 || index >= len(metas) {
+		return Attachment{}, nil, fmt.Errorf("attachment with index %d not found (message has %d)", index, len(metas))
 	}
-	meta := parts[index].meta
-	meta.Index = index
-	return meta, parts[index].data, nil
+	return metas[index], datas[index], nil
+}
+
+// ExtractAll returns every attachment (flattened, nested .eml included)
+// with its content in ONE pass — callers probing several attachments must
+// use this instead of ExtractAttachment in a loop, which would re-parse
+// the whole message per call.
+func ExtractAll(raw []byte) ([]Attachment, [][]byte, error) {
+	parts, err := collectParts(raw, "", 0, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	metas := make([]Attachment, len(parts))
+	datas := make([][]byte, len(parts))
+	for i, pt := range parts {
+		pt.meta.Index = i
+		metas[i] = pt.meta
+		datas[i] = pt.data
+	}
+	return metas, datas, nil
 }
 
 func formatAddrs(addrs []*mail.Address) string {

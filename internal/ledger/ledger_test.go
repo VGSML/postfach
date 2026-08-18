@@ -21,7 +21,7 @@ func TestLifecycle(t *testing.T) {
 		FieldDef{Name: "status", Description: "new/geprüft/bezahlt"})
 
 	// Insert.
-	_, updated, undeclared, err := l.Upsert("rechnungen", Entry{
+	_, updated, undeclared, _, err := l.Upsert("rechnungen", Entry{
 		Key:    "RE-1|Berlin Recycling",
 		Fields: map[string]any{"betrag": "1190.00", "status": "new"},
 	})
@@ -34,7 +34,7 @@ func TestLifecycle(t *testing.T) {
 
 	// Update by same key: status changes, betrag survives; empty ignored;
 	// a new field is reported as undeclared but stored.
-	stored, updated, undeclared, err := l.Upsert("rechnungen", Entry{
+	stored, updated, undeclared, total, err := l.Upsert("rechnungen", Entry{
 		Key:    "RE-1|Berlin Recycling",
 		Fields: map[string]any{"status": "bezahlt", "betrag": "", "kategorie": "Entsorgung"},
 	})
@@ -46,6 +46,9 @@ func TestLifecycle(t *testing.T) {
 	}
 	if len(undeclared) != 1 || undeclared[0] != "kategorie" {
 		t.Errorf("undeclared = %v", undeclared)
+	}
+	if total != 1 {
+		t.Errorf("total = %d, want 1", total)
 	}
 
 	// Second registry; enumeration carries docs and counts.
@@ -83,17 +86,17 @@ func TestLifecycle(t *testing.T) {
 
 func TestUpsertValidation(t *testing.T) {
 	l := New(t.TempDir(), nil)
-	if _, _, _, err := l.Upsert("nope", Entry{Key: "k", Fields: map[string]any{"a": 1}}); err == nil {
+	if _, _, _, _, err := l.Upsert("nope", Entry{Key: "k", Fields: map[string]any{"a": 1}}); err == nil {
 		t.Error("upsert into nonexistent registry accepted")
 	}
 	mustCreate(t, l, "ok", "")
-	if _, _, _, err := l.Upsert("Bad Name!", Entry{Key: "k", Fields: map[string]any{"a": 1}}); err == nil {
+	if _, _, _, _, err := l.Upsert("Bad Name!", Entry{Key: "k", Fields: map[string]any{"a": 1}}); err == nil {
 		t.Error("invalid registry name accepted")
 	}
-	if _, _, _, err := l.Upsert("ok", Entry{Fields: map[string]any{"a": 1}}); err == nil {
+	if _, _, _, _, err := l.Upsert("ok", Entry{Fields: map[string]any{"a": 1}}); err == nil {
 		t.Error("missing key accepted")
 	}
-	if _, _, _, err := l.Upsert("ok", Entry{Key: "k"}); err == nil {
+	if _, _, _, _, err := l.Upsert("ok", Entry{Key: "k"}); err == nil {
 		t.Error("empty fields accepted")
 	}
 }
@@ -102,7 +105,7 @@ func TestXLSXWorkbook(t *testing.T) {
 	l := New(t.TempDir(), nil)
 	mustCreate(t, l, "rechnungen", "", FieldDef{Name: "verkaeufer"}, FieldDef{Name: "brutto"})
 	mustCreate(t, l, "anfragen", "", FieldDef{Name: "thema"})
-	if _, _, _, err := l.Upsert("rechnungen", Entry{
+	if _, _, _, _, err := l.Upsert("rechnungen", Entry{
 		Key:    "RE-9",
 		Fields: map[string]any{"verkaeufer": "ACME", "brutto": "10.00"},
 		Source: Source{UID: 42, SavedPath: "/x/re9.pdf"},
@@ -145,7 +148,7 @@ func TestXLSXDocumentHyperlink(t *testing.T) {
 		return "https://drive.example/search?q=" + name
 	})
 	mustCreate(t, l, "rechnungen", "", FieldDef{Name: "brutto"}, FieldDef{Name: "link"})
-	if _, _, _, err := l.Upsert("rechnungen", Entry{
+	if _, _, _, _, err := l.Upsert("rechnungen", Entry{
 		Key: "RE-9",
 		Fields: map[string]any{
 			"brutto": "10.00",

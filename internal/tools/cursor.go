@@ -65,6 +65,8 @@ func (t *Tools) registerCursorTools(s *server.MCPServer) {
 
 func (t *Tools) handleGetCursor(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	mailbox := argString(req.GetArguments(), "mailbox", "INBOX")
+	t.fsMu.Lock()
+	defer t.fsMu.Unlock()
 	cursors, err := t.loadCursors()
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
@@ -95,6 +97,8 @@ func (t *Tools) handleSetCursor(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("last_uid and uid_validity are required and must be positive"), nil
 	}
 
+	t.fsMu.Lock()
+	defer t.fsMu.Unlock()
 	cursors, err := t.loadCursors()
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil

@@ -10,15 +10,15 @@ func seq(n int) []uint32 {
 	return ids
 }
 
-func TestChunkIDs(t *testing.T) {
-	if got := chunkIDs(nil, 10, 2); got != nil {
+func TestChunkSlice(t *testing.T) {
+	if got := chunkSlice[uint32](nil, 10, 2); got != nil {
 		t.Errorf("empty input: got %v", got)
 	}
-	if got := chunkIDs(seq(10), 10, 2); len(got) != 1 || len(got[0]) != 10 {
+	if got := chunkSlice(seq(10), 10, 2); len(got) != 1 || len(got[0]) != 10 {
 		t.Errorf("exact fit: got %d chunks", len(got))
 	}
 
-	chunks := chunkIDs(seq(25), 10, 3)
+	chunks := chunkSlice(seq(25), 10, 3)
 	// step 7: [0:10) [7:17) [14:24) [21:25)
 	if len(chunks) != 4 {
 		t.Fatalf("got %d chunks, want 4", len(chunks))

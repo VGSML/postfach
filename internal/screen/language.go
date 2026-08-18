@@ -26,7 +26,6 @@ import (
 type LanguageGate struct {
 	allowed        map[string]bool // ISO 639-3
 	allowedScripts []*unicode.RangeTable
-	scriptNames    map[*unicode.RangeTable]string
 	detectOptions  whatlanggo.Options
 }
 
@@ -82,8 +81,7 @@ var knownScripts = map[*unicode.RangeTable]string{
 // NewLanguageGate builds the gate from ISO 639-1 or 639-3 codes.
 func NewLanguageGate(langs []string) (*LanguageGate, error) {
 	g := &LanguageGate{
-		allowed:     map[string]bool{},
-		scriptNames: knownScripts,
+		allowed: map[string]bool{},
 	}
 	scriptSet := map[*unicode.RangeTable]bool{}
 	for _, l := range langs {
@@ -119,8 +117,11 @@ func (g *LanguageGate) Screen(_ context.Context, text string) (Verdict, error) {
 
 	// 1. Script gate.
 	foreign := map[string]int{}
-	letters := 0
+	letters, nonSpace := 0, 0
 	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			nonSpace++
+		}
 		if !unicode.IsLetter(r) {
 			continue
 		}
@@ -136,7 +137,7 @@ func (g *LanguageGate) Screen(_ context.Context, text string) (Verdict, error) {
 			continue
 		}
 		name := "other"
-		for table, n := range g.scriptNames {
+		for table, n := range knownScripts {
 			if unicode.Is(table, r) {
 				name = n
 				break
@@ -157,8 +158,10 @@ func (g *LanguageGate) Screen(_ context.Context, text string) (Verdict, error) {
 			"language:foreign script outside allowlist: "+strings.Join(names, ", "))
 	}
 
-	// 2. Statistical language ID for texts long enough to be reliable.
-	if letters >= langIDMinLetters {
+	// 2. Statistical language ID — only for texts long enough AND
+	// prose-like enough to be reliable: on structured text (JSON, tables,
+	// reference lists) trigram detection "reliably" hallucinates languages.
+	if letters >= langIDMinLetters && letters*100 >= nonSpace*60 {
 		info := whatlanggo.Detect(text)
 		code := whatlanggo.LangToString(info.Lang)
 		if info.IsReliable() && code != "" && !g.allowed[code] {

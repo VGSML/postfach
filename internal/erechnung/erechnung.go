@@ -52,13 +52,15 @@ type Invoice struct {
 
 // ---- UBL (XRechnung UBL syntax) ---------------------------------------
 
+// ublInvoice covers both UBL Invoice and UBL CreditNote roots: no XMLName
+// pin, and the CreditNote-specific element names live in parallel fields.
 type ublInvoice struct {
-	XMLName          xml.Name `xml:"Invoice"`
 	CustomizationID  string   `xml:"CustomizationID"`
 	ID               string   `xml:"ID"`
 	IssueDate        string   `xml:"IssueDate"`
 	DueDate          string   `xml:"DueDate"`
 	InvoiceTypeCode  string   `xml:"InvoiceTypeCode"`
+	CreditNoteType   string   `xml:"CreditNoteTypeCode"`
 	DocumentCurrency string   `xml:"DocumentCurrencyCode"`
 	BuyerReference   string   `xml:"BuyerReference"`
 	Supplier         ublParty `xml:"AccountingSupplierParty>Party"`
@@ -78,17 +80,24 @@ type ublInvoice struct {
 		TaxInclusive  string `xml:"TaxInclusiveAmount"`
 		Payable       string `xml:"PayableAmount"`
 	} `xml:"LegalMonetaryTotal"`
-	Lines []struct {
-		ID       string `xml:"ID"`
-		Quantity struct {
-			Value string `xml:",chardata"`
-			Unit  string `xml:"unitCode,attr"`
-		} `xml:"InvoicedQuantity"`
-		Amount string `xml:"LineExtensionAmount"`
-		Item   struct {
-			Name string `xml:"Name"`
-		} `xml:"Item"`
-	} `xml:"InvoiceLine"`
+	Lines   []ublLine `xml:"InvoiceLine"`
+	CNLines []ublLine `xml:"CreditNoteLine"`
+}
+
+type ublLine struct {
+	ID       string `xml:"ID"`
+	Quantity struct {
+		Value string `xml:",chardata"`
+		Unit  string `xml:"unitCode,attr"`
+	} `xml:"InvoicedQuantity"`
+	CNQuantity struct {
+		Value string `xml:",chardata"`
+		Unit  string `xml:"unitCode,attr"`
+	} `xml:"CreditedQuantity"`
+	Amount string `xml:"LineExtensionAmount"`
+	Item   struct {
+		Name string `xml:"Name"`
+	} `xml:"Item"`
 }
 
 type ublParty struct {
@@ -198,14 +207,14 @@ func ParseXML(data []byte) (*Invoice, error) {
 	switch root {
 	case "Invoice", "CreditNote":
 		var u ublInvoice
-		if err := xml.Unmarshal(bytes.ReplaceAll(data, []byte("<CreditNote"), []byte("<Invoice")), &u); err != nil {
+		if err := xml.Unmarshal(data, &u); err != nil {
 			return nil, fmt.Errorf("parse UBL: %w", err)
 		}
 		inv := &Invoice{
 			Format:         "ubl",
 			Profile:        strings.TrimSpace(u.CustomizationID),
 			InvoiceNumber:  strings.TrimSpace(u.ID),
-			TypeCode:       strings.TrimSpace(u.InvoiceTypeCode),
+			TypeCode:       strings.TrimSpace(u.InvoiceTypeCode + u.CreditNoteType),
 			IssueDate:      strings.TrimSpace(u.IssueDate),
 			DueDate:        strings.TrimSpace(u.DueDate),
 			Currency:       strings.TrimSpace(u.DocumentCurrency),
@@ -228,14 +237,21 @@ func ParseXML(data []byte) (*Invoice, error) {
 				inv.PaymentReference = strings.TrimSpace(pm.PaymentID)
 			}
 		}
-		for _, l := range u.Lines {
+		for _, l := range append(u.Lines, u.CNLines...) {
+			qty, unit := l.Quantity.Value, l.Quantity.Unit
+			if strings.TrimSpace(qty) == "" {
+				qty, unit = l.CNQuantity.Value, l.CNQuantity.Unit
+			}
 			inv.Lines = append(inv.Lines, Line{
 				ID:          strings.TrimSpace(l.ID),
 				Description: strings.TrimSpace(l.Item.Name),
-				Quantity:    strings.TrimSpace(l.Quantity.Value),
-				Unit:        l.Quantity.Unit,
+				Quantity:    strings.TrimSpace(qty),
+				Unit:        unit,
 				NetAmount:   strings.TrimSpace(l.Amount),
 			})
+		}
+		if root == "CreditNote" {
+			inv.Format = "ubl-creditnote"
 		}
 		return inv, nil
 

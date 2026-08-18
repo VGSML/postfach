@@ -189,6 +189,41 @@ func TestParseCII(t *testing.T) {
 	}
 }
 
+func TestParseUBLCreditNote(t *testing.T) {
+	cn := `<?xml version="1.0" encoding="UTF-8"?>
+<CreditNote xmlns="urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2"
+            xmlns:cac="urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2"
+            xmlns:cbc="urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2">
+  <cbc:ID>GS-2026-77</cbc:ID>
+  <cbc:IssueDate>2026-08-01</cbc:IssueDate>
+  <cbc:CreditNoteTypeCode>381</cbc:CreditNoteTypeCode>
+  <cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>
+  <cac:AccountingSupplierParty><cac:Party>
+    <cac:PartyLegalEntity><cbc:RegistrationName>Berlin Recycling GmbH</cbc:RegistrationName></cac:PartyLegalEntity>
+  </cac:Party></cac:AccountingSupplierParty>
+  <cac:LegalMonetaryTotal>
+    <cbc:TaxInclusiveAmount currencyID="EUR">-119.00</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="EUR">-119.00</cbc:PayableAmount>
+  </cac:LegalMonetaryTotal>
+  <cac:CreditNoteLine>
+    <cbc:ID>1</cbc:ID>
+    <cbc:CreditedQuantity unitCode="C62">1</cbc:CreditedQuantity>
+    <cbc:LineExtensionAmount currencyID="EUR">-100.00</cbc:LineExtensionAmount>
+    <cac:Item><cbc:Name>Gutschrift Leerung</cbc:Name></cac:Item>
+  </cac:CreditNoteLine>
+</CreditNote>`
+	inv, err := ParseXML([]byte(cn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inv.Format != "ubl-creditnote" || inv.InvoiceNumber != "GS-2026-77" || inv.TypeCode != "381" {
+		t.Errorf("header: %+v", inv)
+	}
+	if inv.TotalGross != "-119.00" || len(inv.Lines) != 1 || inv.Lines[0].Quantity != "1" {
+		t.Errorf("amounts/lines: %+v", inv)
+	}
+}
+
 func TestParseXMLRejectsOther(t *testing.T) {
 	if _, err := ParseXML([]byte(`<?xml version="1.0"?><foo/>`)); err == nil {
 		t.Error("non-invoice XML accepted")

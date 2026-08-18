@@ -23,11 +23,6 @@ func chunkSlice[T any](items []T, size, overlap int) [][]T {
 	return out
 }
 
-// chunkIDs is chunkSlice for token ids (kept for readability at call sites).
-func chunkIDs(ids []uint32, size, overlap int) [][]uint32 {
-	return chunkSlice(ids, size, overlap)
-}
-
 // chunkRunes splits text into rune windows and returns them as strings.
 func chunkRunes(s string, size, overlap int) []string {
 	runes := chunkSlice([]rune(s), size, overlap)

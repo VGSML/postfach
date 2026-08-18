@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"sort"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -141,18 +140,17 @@ func (t *Tools) handleRecordEntry(_ context.Context, req mcp.CallToolRequest) (*
 		e.Source.AttachmentIndex = &idx
 	}
 
-	stored, updated, undeclared, err := t.ledger.Upsert(registry, e)
+	stored, updated, undeclared, total, err := t.ledger.Upsert(registry, e)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	entries, _ := t.ledger.Load(registry)
 	result := map[string]any{
 		"recorded":      true,
 		"updated":       updated,
 		"registry":      registry,
 		"entry":         stored,
 		"spreadsheet":   t.ledger.XLSXPath(),
-		"total_entries": len(entries),
+		"total_entries": total,
 	}
 	if len(undeclared) > 0 {
 		result["undeclared_fields"] = undeclared
@@ -173,9 +171,7 @@ func (t *Tools) handleListEntries(_ context.Context, req mcp.CallToolRequest) (*
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	sort.SliceStable(entries, func(i, j int) bool {
-		return entries[i].RecordedAt > entries[j].RecordedAt
-	})
+	ledger.SortNewestFirst(entries)
 	if len(entries) > limit {
 		entries = entries[:limit]
 	}

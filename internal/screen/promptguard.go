@@ -203,9 +203,9 @@ func (p *PromptGuard) Screen(ctx context.Context, text string) (Verdict, error) 
 		return v, nil
 	}
 
-	chunks := chunkIDs(ids, pgWindow, pgOverlap)
+	chunks := chunkSlice(ids, pgWindow, pgOverlap)
 	if len(ids) > pgFineWindow {
-		chunks = append(chunks, chunkIDs(ids, pgFineWindow, pgFineOverlap)...)
+		chunks = append(chunks, chunkSlice(ids, pgFineWindow, pgFineOverlap)...)
 	}
 	var maxScore float32
 	worst := -1

@@ -167,11 +167,31 @@ func (g *LLMGuard) Screen(ctx context.Context, text string) (Verdict, error) {
 		if safety == "unsafe" || (safety == "controversial" && attack) || (safety == "" && attack) {
 			v.Flagged = true
 			v.Reasons = append(v.Reasons, fmt.Sprintf(
-				"llmguard:%s in window %d/%d", strings.TrimSpace(verdictLine), i+1, len(chunks)))
+				"llmguard:%s in window %d/%d", verdictSummary(verdictLine), i+1, len(chunks)))
 			return v, nil
 		}
 	}
 	return v, nil
+}
+
+// verdictSummary compacts a guard reply to its Safety/Categories lines for
+// the verdict reason (rune-safe cap as a fallback).
+func verdictSummary(reply string) string {
+	var keep []string
+	for _, ln := range strings.Split(reply, "\n") {
+		low := strings.ToLower(ln)
+		if strings.Contains(low, "safety") || strings.Contains(low, "categor") {
+			keep = append(keep, strings.TrimSpace(ln))
+		}
+	}
+	out := strings.Join(keep, " | ")
+	if out == "" {
+		out = reply
+	}
+	if r := []rune(out); len(r) > 200 {
+		out = string(r[:200])
+	}
+	return out
 }
 
 func (g *LLMGuard) classify(ctx context.Context, text string) (string, error) {
@@ -211,11 +231,7 @@ func (g *LLMGuard) classify(ctx context.Context, text string) (string, error) {
 		return "", fmt.Errorf("guard LLM returned no choices")
 	}
 	// Qwen3Guard-Gen replies like "Safety: Unsafe\nCategories: Jailbreak".
-	content := out.Choices[0].Message.Content
-	// Some runtimes keep <think> blocks; the verdict lines are what matter.
-	content = strings.TrimSpace(content)
-	if len(content) > 200 {
-		content = content[len(content)-200:]
-	}
-	return content, nil
+	// Return the FULL reply: truncating here could cut off the verdict line
+	// (some runtimes append long rationale or <think> blocks after it).
+	return strings.TrimSpace(out.Choices[0].Message.Content), nil
 }

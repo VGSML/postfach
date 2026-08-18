@@ -68,6 +68,13 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("POSTFACH_IMAP_URL: missing host")
 	}
 	cfg.Host = u.Hostname()
+	if cfg.Insecure {
+		switch cfg.Host {
+		case "localhost", "127.0.0.1", "::1":
+		default:
+			return nil, fmt.Errorf("imap+insecure:// is restricted to loopback hosts (tests/local dev); use imaps:// for %q", cfg.Host)
+		}
+	}
 	if p := u.Port(); p != "" {
 		cfg.Port = p
 	}

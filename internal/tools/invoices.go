@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -38,8 +37,9 @@ type invoiceResult struct {
 		SHA256          string `json:"sha256,omitempty"`
 		EmbeddedXML     string `json:"embedded_xml,omitempty"`
 	} `json:"source"`
-	Invoice   *erechnung.Invoice `json:"invoice"`
+	Invoice   *erechnung.Invoice `json:"invoice,omitempty"`
 	Screening *screen.Verdict    `json:"screening,omitempty"`
+	Note      string             `json:"note,omitempty"`
 }
 
 func (t *Tools) handleGetERechnung(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -61,24 +61,22 @@ func (t *Tools) handleGetERechnung(ctx context.Context, req mcp.CallToolRequest)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
-	parsed, err := mail.Parse(raw)
+	// One pass over the message: probing every attachment must not re-parse
+	// the whole MIME tree per attachment.
+	metas, datas, err := mail.ExtractAll(raw)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}
 
 	var results []invoiceResult
 	var probed []string
-	for _, att := range parsed.Attachments {
-		if wantIndex >= 0 && att.Index != wantIndex {
+	for i, meta := range metas {
+		if wantIndex >= 0 && meta.Index != wantIndex {
 			continue
 		}
-		meta, data, err := mail.ExtractAttachment(raw, att.Index)
-		if err != nil {
-			continue
-		}
-		inv, embeddedName, perr := probeAttachment(meta, data)
+		inv, embeddedName, perr := probeAttachment(meta, datas[i])
 		if perr != nil {
-			probed = append(probed, fmt.Sprintf("%d:%s (%v)", att.Index, meta.Filename, perr))
+			probed = append(probed, fmt.Sprintf("%d:%s (%v)", meta.Index, meta.Filename, perr))
 			continue
 		}
 		if inv == nil {
@@ -86,29 +84,42 @@ func (t *Tools) handleGetERechnung(ctx context.Context, req mcp.CallToolRequest)
 		}
 		sanitizeInvoice(inv)
 		r := invoiceResult{Invoice: inv}
-		r.Source.AttachmentIndex = att.Index
+		r.Source.AttachmentIndex = meta.Index
 		r.Source.Filename = screen.StripInvisible(meta.Filename)
-		r.Source.Via = meta.Via
+		r.Source.Via = screen.StripInvisible(meta.Via)
 		r.Source.SHA256 = meta.SHA256
 		r.Source.EmbeddedXML = embeddedName
 
-		// Field values are untrusted email content: screen their JSON view.
-		js, _ := json.Marshal(inv)
-		verdict, err := t.screener.Screen(ctx, string(js))
+		// Field values (and the filename/via they arrived under) are
+		// untrusted email content: screen the human-text values (NOT the
+		// JSON serialization — structured text derails the language
+		// detector) and apply the same redact-by-default policy as every
+		// other read path.
+		verdict, err := t.screener.Screen(ctx, invoiceScreenText(meta, inv))
 		if err != nil {
 			return mcp.NewToolResultError(fmt.Sprintf("screening failed: %v", err)), nil
 		}
 		if verdict.Flagged {
 			v := verdict
 			r.Screening = &v
+			r.Invoice = nil
+			r.Note = "invoice fields were flagged as potential prompt injection and are redacted; " +
+				"inspect the source attachment with read_quarantined, or read_attachment with include_flagged_content=true"
 		}
 		results = append(results, r)
 	}
 
 	if len(results) == 0 {
+		// The probe log quotes attachment names and parser errors — both
+		// derived from untrusted mail — so it passes the guard like any
+		// other mailbox text.
 		msg := fmt.Sprintf("no parseable e-invoice found in message %d", uid)
 		if len(probed) > 0 {
-			msg += "; probed: " + strings.Join(probed, "; ")
+			details, _, err := t.guard(ctx, strings.Join(probed, "; "), false)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			msg += "; probed: " + details
 		}
 		msg += ". Plain PDFs without embedded XML must be read via read_attachment."
 		return mcp.NewToolResultError(msg), nil
@@ -149,6 +160,20 @@ func probeAttachment(meta mail.Attachment, data []byte) (*erechnung.Invoice, str
 		return inv, xmlName, nil
 	}
 	return nil, "", nil
+}
+
+// invoiceScreenText concatenates the prose-carrying parts of a parsed
+// invoice for screening.
+func invoiceScreenText(meta mail.Attachment, inv *erechnung.Invoice) string {
+	parts := []string{
+		meta.Filename, meta.Via,
+		inv.InvoiceNumber, inv.Seller.Name, inv.Buyer.Name,
+		inv.BuyerReference, inv.PaymentReference,
+	}
+	for _, l := range inv.Lines {
+		parts = append(parts, l.Description)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func sanitizeInvoice(inv *erechnung.Invoice) {
