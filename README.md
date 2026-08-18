@@ -51,12 +51,17 @@ the model the processing workflow, and `/postfach:setup`):
 /postfach:setup
 ```
 
-**ChatGPT Work / Codex (developer mode)**: the package doubles as a Codex
-plugin (`.codex-plugin/plugin.json`) with the same skill and a **local
-stdio MCP server**. `./install.sh` generates `.codex-plugin/mcp.json`
-(absolute paths + your config; gitignored). Then, in developer mode, add
-this directory as a **local marketplace** and install the `postfach`
-plugin — same flow as the hugr plugin.
+**ChatGPT Work / Codex (developer mode)** runs local stdio MCP servers
+directly. Two ways in:
+
+- the installer offers `codex mcp add postfach ...` (writes
+  `~/.codex/config.toml`, shared by the ChatGPT desktop app, Codex CLI and
+  the IDE extension), or
+- install the package as a **Codex plugin**: `.codex-plugin/plugin.json`
+  reuses the same skill and points at `.codex-plugin/mcp.json`, which
+  `./install.sh` generates with absolute paths and your config
+  (gitignored). Add this directory as a local marketplace in developer
+  mode and install the `postfach` plugin.
 
 For genuinely remote setups (server on another machine) there is also a
 streamable HTTP mode:

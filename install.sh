@@ -208,7 +208,7 @@ TOOLS=$(echo "$SMOKE" | grep -o '"name":"[a-z_]*"' | sort -u | wc -l | tr -d ' '
 say "server OK: $TOOLS tools registered"
 grep -E 'language allowlist|prompt guard|guard LLM' /tmp/postfach-install-smoke.log | sed 's/^/    /' || true
 
-# --- register with Claude Code -------------------------------------------
+# --- register with Claude Code / Codex ------------------------------------
 if [ "$REGISTER" = 1 ] && command -v claude >/dev/null; then
   if [ "$YES" = 1 ]; then REPLY=y; else read -r -p "Register with Claude Code now (claude mcp add postfach)? [y/N] " REPLY; fi
   if [ "${REPLY:-n}" = "y" ] || [ "${REPLY:-n}" = "Y" ]; then
@@ -216,6 +216,15 @@ if [ "$REGISTER" = 1 ] && command -v claude >/dev/null; then
     claude mcp remove postfach >/dev/null 2>&1 || true
     claude mcp add postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
     say "registered with Claude Code"
+  fi
+fi
+if [ "$REGISTER" = 1 ] && command -v codex >/dev/null; then
+  if [ "$YES" = 1 ]; then REPLY=y; else read -r -p "Register with ChatGPT/Codex now (codex mcp add postfach)? [y/N] " REPLY; fi
+  if [ "${REPLY:-n}" = "y" ] || [ "${REPLY:-n}" = "Y" ]; then
+    ENV_ARGS=(); for kv in "${ENV_KV[@]}"; do ENV_ARGS+=( --env "$kv" ); done
+    codex mcp remove postfach >/dev/null 2>&1 || true
+    codex mcp add postfach "${ENV_ARGS[@]}" -- "$ROOT/postfach-mcp"
+    say "registered with ChatGPT/Codex"
   fi
 fi
 
