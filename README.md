@@ -29,7 +29,7 @@ macOS on Apple Silicon only (for now).
 **From a GitHub release** (prebuilt binary, no Go needed):
 
 ```sh
-curl -fsSL https://github.com/hugr-lab/postfach/releases/latest/download/postfach-darwin-arm64.tar.gz | tar -xz
+curl -fsSL https://github.com/VGSML/postfach/releases/latest/download/postfach-darwin-arm64.tar.gz | tar -xz
 cd postfach && ./install.sh
 ```
 
@@ -52,10 +52,13 @@ Non-interactive: `./install.sh --yes` with config in env.
 the model the processing workflow, and `/postfach:setup`):
 
 ```
-/plugin marketplace add hugr-lab/postfach
+/plugin marketplace add VGSML/postfach
 /plugin install postfach@hugr-lab
 /postfach:setup
 ```
+
+(The repo lives at VGSML/postfach while this is a PoC; the marketplace
+name inside it is `hugr-lab`, where the service will eventually move.)
 
 **ChatGPT Work / Codex (developer mode)** runs local stdio MCP servers
 directly. Two ways in:
