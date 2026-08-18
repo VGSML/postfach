@@ -36,7 +36,7 @@ jobs:
           cp postfach-mcp install.sh README.md dist/postfach/
           cp -R skills commands .claude-plugin dist/postfach/
           cp third_party/onnxruntime/lib/libonnxruntime*.dylib dist/postfach/third_party/onnxruntime/lib/
-          tar -czf "postfach-${GITHUB_REF_NAME}-darwin-arm64.tar.gz" -C dist postfach
+          tar -czf "postfach-darwin-arm64.tar.gz" -C dist postfach
 
       - name: Create release
         env:
@@ -45,4 +45,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "postfach $GITHUB_REF_NAME" \
             --generate-notes \
-            "postfach-${GITHUB_REF_NAME}-darwin-arm64.tar.gz"
+            "postfach-darwin-arm64.tar.gz"

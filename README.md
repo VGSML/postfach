@@ -29,7 +29,7 @@ macOS on Apple Silicon only (for now).
 **From a GitHub release** (prebuilt binary, no Go needed):
 
 ```sh
-curl -fsSL https://github.com/hugr-lab/postfach/releases/latest/download/postfach-latest-darwin-arm64.tar.gz | tar -xz
+curl -fsSL https://github.com/hugr-lab/postfach/releases/latest/download/postfach-darwin-arm64.tar.gz | tar -xz
 cd postfach && ./install.sh
 ```
 
